@@ -1,0 +1,71 @@
+---
+title: "Prediction Model using NY Street Tree Census"
+author: "Lily Li"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readr)
+library(tidyverse)
+library(tidymodels)
+library(kknn)
+tidymodels_prefer()
+raw_data <- read_csv('2015-street-tree-census-tree-data.csv') %>% 
+  dplyr::select(-created_at, -stump_diam, -spc_latin, -user_type, -address, -postcode, -problems, -c(nta:state), -borocode, -c(x_sp:bbl)) %>%
+  dplyr::select(status, health, everything())  %>%
+  filter(status != 'Stump') 
+
+# make categorical variables into factors
+class_data <- raw_data %>% dplyr::select(-c(tree_id, tree_dbh, latitude, longitude))
+raw_data[,colnames(class_data)] <- lapply(class_data,as.factor)
+
+# Ignoring NA values, there are 652,169 trees with species identified
+# if tree is dead the following columns contain NA values: spc_common, steward, guards, sidewalk
+tree_count <- raw_data$spc_common %>% table() 
+remove_rare <- tree_count[tree_count>3000] # remove lower 10-11th percentile
+common_names <- remove_rare %>% names()
+species_data <- bind_cols('Common Name of Species'=common_names, 'Count'=remove_rare)
+
+ggplot(raw_data %>% filter(spc_common %in% common_names), aes(y = reorder(spc_common, spc_common, function(x) length(x)), fill = health)) +
+  geom_bar(position = 'stack') +
+  labs(y = "Common Name for Species")
+
+clean <- raw_data %>% dplyr::select(-spc_common, -steward, -guards, -sidewalk) %>% na.omit() 
+#%>% head(1000)
+
+set.seed(9)
+split <- initial_split(clean, prop = 0.80, strata = health)
+train <- training(split)
+test <- testing(split)
+
+recipe <- recipe(health ~ latitude + longitude, data = train)
+
+knn_mod <- knn_model <-
+  # specify that the model is a k-Nearest Neighhour (kNN)
+  nearest_neighbor() %>%
+  # select the package that the model coming from
+  set_engine("kknn") %>%
+  # choose mode
+  set_mode("classification")
+
+knn_wkflow <- workflow() %>%
+  add_model(knn_mod) %>%
+  add_recipe(recipe)
+
+knn_fit <- fit(knn_wkflow, train)
+
+predict(knn_fit, new_data = test, type = "class") %>%
+  bind_cols(select(test, health)) %>%
+  accuracy(truth=health, estimate= .pred_class)
+
+results <- augment(knn_fit, new_data = test) 
+results %>% roc_auc(truth = health, .pred_Fair:.pred_Poor) # 0.6720176	
+results %>% roc_curve(truth = health, .pred_Fair:.pred_Poor) %>% autoplot()
+# stronger at distinguishing classifications "Good"
+
+```
+
