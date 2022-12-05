@@ -23,22 +23,46 @@ raw_data <- read_csv('2015-street-tree-census-tree-data.csv') %>%
 class_data <- raw_data %>% dplyr::select(-c(tree_id, tree_dbh, latitude, longitude))
 raw_data[,colnames(class_data)] <- lapply(class_data,as.factor)
 
+clean <- raw_data %>% dplyr::select(-spc_common, -steward, -guards, -sidewalk)
+  
+clean_alive <- clean %>% select(-status) %>% na.omit() 
+```
+
+```{r}
+clean_numeric <- clean
+factor_to_numeric <- function(col_data) {
+  for(col in colnames(col_data)){
+    col_data <- col_data %>% mutate(col = factor(col, levels = c("Yes", "No")))
+  }
+  return(col_data)
+}
+
+binary_cols <- clean_numeric %>% select(root_stone:brch_other)
+clean_numeric[,colnames(binary_cols)] <- lapply(binary_cols, factor_to_numeric) # 2 is Yes, 1 is No
+clean_numeric[,colnames(binary_cols)] <- lapply(binary_cols, as.integer)
+
+clean_numeric <- clean_numeric %>% mutate(curb_loc = factor(curb_loc, levels = c("OffsetFromCurb","OnCurb")) %>% as.integer()) # 2 is OnCurb, and 1 is OffsetFromCurb
+```
+
+
+Visualization of Tree Species Distribution
+```{r}
 # Ignoring NA values, there are 652,169 trees with species identified
 # if tree is dead the following columns contain NA values: spc_common, steward, guards, sidewalk
 tree_count <- raw_data$spc_common %>% table() 
-remove_rare <- tree_count[tree_count>3000] # remove lower 10-11th percentile
+remove_rare <- tree_count[tree_count>3000] # remove the rarer species (about 10-11% of the trees)
 common_names <- remove_rare %>% names()
 species_data <- bind_cols('Common Name of Species'=common_names, 'Count'=remove_rare)
 
 ggplot(raw_data %>% filter(spc_common %in% common_names), aes(y = reorder(spc_common, spc_common, function(x) length(x)), fill = health)) +
   geom_bar(position = 'stack') +
   labs(y = "Common Name for Species")
+```
 
-clean <- raw_data %>% dplyr::select(-spc_common, -steward, -guards, -sidewalk) %>% na.omit() 
-#%>% head(1000)
-
+Using K Nearest Neighbors to predict the health of a tree that is alive. Predictors used are latitude and longitude
+```{r}
 set.seed(9)
-split <- initial_split(clean, prop = 0.80, strata = health)
+split <- initial_split(clean_alive, prop = 0.80, strata = health)
 train <- training(split)
 test <- testing(split)
 
@@ -66,6 +90,84 @@ results <- augment(knn_fit, new_data = test)
 results %>% roc_auc(truth = health, .pred_Fair:.pred_Poor) # 0.6720176	
 results %>% roc_curve(truth = health, .pred_Fair:.pred_Poor) %>% autoplot()
 # stronger at distinguishing classifications "Good"
-
 ```
 
+```{r}
+clean_binary <- clean
+clean_binary[, colnames(clean %>% select(curb_loc:brch_other))] <- lapply(clean %>% select(curb_loc:brch_other), as.integer)
+
+  ggplot(aes(x = Year, y=Year, fill= Year)) +
+  geom_bar(stat = "identity", width=0.8) +
+  labs(x = "Year",
+       y = "Number of the Student",
+       title = "Year frequency by Anxiety Reports") +
+  facet_wrap(~Anxiety)+
+  theme_minimal()
+```
+
+Using Numeric Binary Predictors
+```{r}
+set.seed(9)
+split <- initial_split(clean_numeric %>% select(health,latitude, longitude, curb_loc:brch_other, curb_loc) %>% na.omit(), 
+                       prop = 0.80, strata = health)
+train <- training(split)
+test <- testing(split)
+
+recipe <- recipe(health ~ ., data = train)
+
+knn_mod <- knn_model <-
+  # specify that the model is a k-Nearest Neighhour (kNN)
+  nearest_neighbor() %>%
+  # select the package that the model coming from
+  set_engine("kknn") %>%
+  # choose mode
+  set_mode("classification")
+
+knn_wkflow <- workflow() %>%
+  add_model(knn_mod) %>%
+  add_recipe(recipe)
+
+knn_fit <- fit(knn_wkflow, train)
+
+pred <- predict(knn_fit, new_data = test, type = "class") %>%
+  bind_cols(select(test, health)) %>%
+  accuracy(truth=health, estimate= .pred_class) # 0.7965347
+
+results <- augment(knn_fit, new_data = test) 
+results %>% roc_auc(truth = health, .pred_Fair:.pred_Poor) # 0.6775519
+results %>% roc_curve(truth = health, .pred_Fair:.pred_Poor) %>% autoplot()
+# stronger at distinguishing classifications "Good"
+```
+
+Using boosted trees to predict health of a tree that is alive
+```{r}
+library(xgboost)
+set.seed(9)
+split <- initial_split(clean_alive %>% select(-block_id, -zip_city, -`community board`, -cncldist, -st_assem, -st_senate), prop = 0.80, strata = health)
+train <- training(split)
+test <- testing(split)
+
+new_recipe <- recipe(health ~ . , data = train) %>%
+  step_dummy(all_nominal_predictors())
+
+boost_tree_model <- boost_tree() %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+boost_wkf <- workflow() %>% 
+  add_model(boost_tree_model) %>%
+  add_recipe(new_recipe)
+
+boost_tree_fit <- fit(boost_wkf, train)
+
+log_reg_fit$fit$fit$fit %>% summary() 
+
+boost_tree_pred <- predict(boost_tree_fit, new_data = test, type = "class") %>%
+  bind_cols(select(test, health)) %>%
+  accuracy(truth=health, estimate= .pred_class) # 0.8139226
+
+boost_tree_results <- augment(boost_tree_fit, new_data = test) 
+
+boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Fair:.pred_Poor) # 0.6529426	
+boost_tree_results %>% roc_curve(truth = health, .pred_Fair:.pred_Poor) %>% autoplot()
+```
