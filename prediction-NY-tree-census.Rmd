@@ -160,8 +160,6 @@ boost_wkf <- workflow() %>%
 
 boost_tree_fit <- fit(boost_wkf, train)
 
-log_reg_fit$fit$fit$fit %>% summary() 
-
 boost_tree_pred <- predict(boost_tree_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
   accuracy(truth=health, estimate= .pred_class) # 0.8139226
@@ -170,4 +168,36 @@ boost_tree_results <- augment(boost_tree_fit, new_data = test)
 
 boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Fair:.pred_Poor) # 0.6529426	
 boost_tree_results %>% roc_curve(truth = health, .pred_Fair:.pred_Poor) %>% autoplot()
+boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap") # incorrectly predicts "Good" for many trees in poor or fair health
 ```
+
+```{r}
+library(corrplot)
+corrplot(cor(select_if(clean_numeric, is.numeric)), method="color", type="lower") # longitude and latitude seem to be the only predictors with moderately strong correlations with one another. coerrelation coeff is 0.57
+```
+
+```{r, warning=FALSE}
+nyc <- map_data("state", "new york") %>% 
+  select(long, lat, group, id = subregion)
+ggplot() +
+  geom_polygon(aes(x = long, y = lat, group = group),fill = "white", colour = "grey50", data = nyc) +
+  xlab('Longitude') + 
+  ylab('Latitude') + 
+  stat_density2d(aes(x = longitude, y = latitude, fill = status), alpha = .5,
+                 h = .02, n = 200,
+                 geom = "polygon", data = clean  %>% head(10000)) + 
+  xlim(-74.25, -73.70) + ylim(40.50, 40.91)
+
+```
+
+```{r}
+borough_data <- raw_data %>% 
+  mutate(stat_health = ifelse(status == "Alive", as.character(health), as.character(status))) %>%
+  mutate(stat_health = factor(stat_health, levels = c("Dead", "Poor", "Fair", "Good"))) %>%
+  select(borough, stat_health) %>% na.omit()
+
+ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), fill = stat_health)) +
+  geom_bar(position = 'stack') +
+  labs(y = "Borough")
+```
+
