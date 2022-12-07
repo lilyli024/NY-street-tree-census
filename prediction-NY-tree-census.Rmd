@@ -13,6 +13,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## About the Data
 
+See [Kaggle Dataset](https://www.kaggle.com/datasets/new-york-city/ny-2015-street-tree-census-tree-data)
+
+* `status`: Indicates status of the tree; levels: Alive, Dead
 * `health`: Indicates health of the tree; levels: dead, poor, fair, good
 * `tree_dbh`: Diameter of the tree, measured at approximately 54 inches above the ground
 * `curb_loc`: Indicates trees relationship to the curb; levels: OnCurb, OffsetFromCurb
@@ -39,22 +42,25 @@ library(tidyverse)
 library(tidymodels)
 library(kknn)
 library(usethis) 
-usethis::edit_r_environ("project")
+usethis::edit_r_environ("project") # allocate memory to fit knn model
 tidymodels_prefer()
 raw_data <- read_csv('2015-street-tree-census-tree-data.csv')
 ```
 
 # Data Cleaning
 ```{r, message=FALSE, warning=FALSE}
-clean <- raw_data %>%
+clean_with_status <- raw_data %>%
   filter(status != 'Stump') %>%
   mutate(health = ifelse(status == "Alive", as.character(health), as.character(status))) %>%
   mutate(health = factor(health, levels = c("Dead", "Poor", "Fair", "Good"))) %>%
-  dplyr::select(health, tree_dbh, curb_loc, spc_common, c(root_stone:brch_other), borough, latitude, longitude) %>% head(5000)
+  dplyr::select(status, health, tree_dbh, curb_loc, spc_common, c(root_stone:brch_other), borough, latitude, longitude) %>% head(10000)
+
 
 # make categorical variables into factors
-clean[,colnames(clean %>% select_if(is.character))] <- lapply(clean %>% select_if(is.character),as.factor)
-  
+clean_with_status[,colnames(clean_with_status %>% select_if(is.character))] <- lapply(clean_with_status %>% select_if(is.character),as.factor)
+
+clean <- clean_with_status %>% select(-status)
+
 clean_alive <- clean %>% na.omit() 
 
 clean_numeric <- clean
@@ -78,12 +84,12 @@ Visualization of Tree Species Distribution
 ```{r}
 # Ignoring NA values, there are 652,169 trees with species identified
 # if tree is dead the following columns contain NA values: spc_common, steward, guards, sidewalk
-tree_count <- clean$spc_common %>% table()
-remove_rare <- tree_count[tree_count>3000] # remove the rarer species (about 10-11% of the trees)
+tree_count <- clean_alive$spc_common %>% table()
+remove_rare <- tree_count[tree_count>5000] # remove the rarer species (a little over 15% of the trees)
 common_names <- remove_rare %>% names()
 species_data <- bind_cols('Common Name of Species'=common_names, 'Count'=remove_rare)
 
-ggplot(clean %>% filter(spc_common %in% common_names), aes(y = reorder(spc_common, spc_common, function(x) length(x)), fill = health)) +
+ggplot(clean_alive %>% filter(spc_common %in% common_names), aes(y = reorder(spc_common, spc_common, function(x) length(x)), fill = health)) +
   geom_bar(position = 'stack') +
   labs(y = "Common Name for Species")
 ```
@@ -91,7 +97,9 @@ ggplot(clean %>% filter(spc_common %in% common_names), aes(y = reorder(spc_commo
 Using K Nearest Neighbors to predict the health of a tree that is alive. Predictors used are latitude and longitude
 ```{r}
 set.seed(9)
-split <- initial_split(clean_alive, prop = 0.80, strata = health)
+clean <- clean_alive %>% filter(spc_common %in% common_names)
+clean <- clean %>% mutate(health = factor(health, levels = c("Poor", "Fair", "Good")))
+split <- initial_split(clean, prop = 0.80, strata = health)
 train <- training(split)
 test <- testing(split)
 
@@ -116,9 +124,9 @@ predict(knn_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
   accuracy(truth=health, estimate= .pred_class)
 
-results <- augment(knn_fit, new_data = test) 
-results %>% roc_auc(truth = health, .pred_Fair:.pred_Poor) # 0.6720176	
-results %>% roc_curve(truth = health, .pred_Fair:.pred_Poor) %>% autoplot()
+results <- augment(knn_fit, new_data = test)
+results %>% roc_auc(truth = health, .pred_Poor:.pred_Good) # 0.6720176	
+results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 # stronger at distinguishing classifications "Good"
 ```
 
@@ -134,10 +142,7 @@ ggplot() +
   geom_polygon(aes(x = long, y = lat, group = group),fill = "white", colour = "grey80", data = nyc) +
   xlab('Longitude') + 
   ylab('Latitude') + 
-  #stat_density2d(aes(x = longitude, y = latitude, fill = status), alpha = .5,
-                 #h = .02, n = 200,
-                 #geom = "polygon", data = clean) + 
-  geom_point(aes(x = longitude, y = latitude, colour=status), size = .3, alpha = 0.5, data=clean)+
+  geom_point(aes(x = longitude, y = latitude, colour=status), size = .3, alpha = 0.5, data=clean_with_status)+
   xlim(-74.25, -73.70) + ylim(40.50, 40.91) +
   geom_text(data = borough_labels, aes(x = long, y = lat, label = borough))
 ```
@@ -149,15 +154,15 @@ ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), 
   labs(y = "Borough")
 ```
 
-Using Numeric Binary Predictors
+
 ```{r}
 set.seed(9)
-split <- initial_split(clean_numeric %>% select(health,latitude, longitude, curb_loc:brch_other, curb_loc) %>% na.omit(), 
-                       prop = 0.80, strata = health)
+split <- initial_split(clean %>% select(-spc_common, -borough), prop = 0.80, strata = health)
 train <- training(split)
 test <- testing(split)
 
-recipe <- recipe(health ~ ., data = train)
+recipe <- recipe(health ~ ., data = train) %>%
+  step_dummy(all_nominal_predictors())
 
 knn_mod <- knn_model <-
   # specify that the model is a k-Nearest Neighhour (kNN)
@@ -178,8 +183,8 @@ pred <- predict(knn_fit, new_data = test, type = "class") %>%
   accuracy(truth=health, estimate= .pred_class) # 0.7965347
 
 results <- augment(knn_fit, new_data = test) 
-results %>% roc_auc(truth = health, .pred_Fair:.pred_Poor) # 0.6775519
-results %>% roc_curve(truth = health, .pred_Fair:.pred_Poor) %>% autoplot()
+results %>% roc_auc(truth = health, .pred_Dead:.pred_Good) # 0.6775519
+results %>% roc_curve(truth = health, .pred_Dead:.pred_Good) %>% autoplot()
 # stronger at distinguishing classifications "Good"
 ```
 
@@ -187,7 +192,7 @@ Using boosted trees to predict health of a tree that is alive
 ```{r}
 library(xgboost)
 set.seed(9)
-split <- initial_split(clean_alive, prop = 0.80, strata = health)
+split <- initial_split(clean %>% select(-spc_common, -borough), prop = 0.80, strata = health)
 train <- training(split)
 test <- testing(split)
 
@@ -210,8 +215,8 @@ boost_tree_pred <- predict(boost_tree_fit, new_data = test, type = "class") %>%
 
 boost_tree_results <- augment(boost_tree_fit, new_data = test) 
 
-boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Fair:.pred_Poor) # 0.6529426	
-boost_tree_results %>% roc_curve(truth = health, .pred_Fair:.pred_Poor) %>% autoplot()
+boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Dead:.pred_Good) # 0.6529426	
+boost_tree_results %>% roc_curve(truth = health, .pred_Dead:.pred_Good) %>% autoplot()
 boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap") # incorrectly predicts "Good" for many trees in poor or fair health
 ```
 

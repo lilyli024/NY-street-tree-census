@@ -15,3 +15,5 @@ brch_other (fctr): Indicates the presence of other branch problems
 borough (fctr): NYC borough; levels: Bronx, Brooklyn, Manhattan, Queens, Staten Island
 latitude (double): Latitude of tree location, in decimal degrees
 longitude (double): Longitude of tree location, in decimal degrees
+
+data from https://www.kaggle.com/datasets/new-york-city/ny-2015-street-tree-census-tree-data
