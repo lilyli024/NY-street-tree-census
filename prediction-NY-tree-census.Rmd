@@ -40,7 +40,9 @@ See [Kaggle Dataset](https://www.kaggle.com/datasets/new-york-city/ny-2015-stree
 library(readr)
 library(tidyverse)
 library(tidymodels)
-library(kknn)
+library(kknn) 
+library(xgboost) # for boosted trees
+library(randomForest)
 library(usethis) 
 usethis::edit_r_environ("project") # allocate memory to fit knn model
 tidymodels_prefer()
@@ -59,23 +61,9 @@ clean_with_status <- raw_data %>%
 # make categorical variables into factors
 clean_with_status[,colnames(clean_with_status %>% select_if(is.character))] <- lapply(clean_with_status %>% select_if(is.character),as.factor)
 
-clean <- clean_with_status %>% select(-status)
+clean <- clean_with_status %>% select(-status) %>% 
+  mutate(health = factor(health, levels = c("Poor", "Fair", "Good"))) %>% na.omit() 
 
-clean_alive <- clean %>% na.omit() 
-
-clean_numeric <- clean
-factor_to_numeric <- function(col_data) {
-  for(col in colnames(col_data)){
-    col_data <- col_data %>% mutate(col = factor(col, levels = c("Yes", "No")))
-  }
-  return(col_data)
-}
-
-binary_cols <- clean_numeric %>% select(root_stone:brch_other)
-clean_numeric[,colnames(binary_cols)] <- lapply(binary_cols, factor_to_numeric) # 2 is Yes, 1 is No
-clean_numeric[,colnames(binary_cols)] <- lapply(binary_cols, as.integer)
-
-clean_numeric <- clean_numeric %>% mutate(curb_loc = factor(curb_loc, levels = c("OffsetFromCurb","OnCurb")) %>% as.integer()) # 2 is OnCurb, and 1 is OffsetFromCurb
 ```
 
 # Exploratory Data Analysis
@@ -84,50 +72,16 @@ Visualization of Tree Species Distribution
 ```{r}
 # Ignoring NA values, there are 652,169 trees with species identified
 # if tree is dead the following columns contain NA values: spc_common, steward, guards, sidewalk
-tree_count <- clean_alive$spc_common %>% table()
+tree_count <- clean$spc_common %>% table()
 remove_rare <- tree_count[tree_count>5000] # remove the rarer species (a little over 15% of the trees)
 common_names <- remove_rare %>% names()
 species_data <- bind_cols('Common Name of Species'=common_names, 'Count'=remove_rare)
 
-ggplot(clean_alive %>% filter(spc_common %in% common_names), aes(y = reorder(spc_common, spc_common, function(x) length(x)), fill = health)) +
+clean <- clean %>% filter(spc_common %in% common_names)
+                          
+ggplot(clean %>% filter(spc_common %in% common_names), aes(y = reorder(spc_common, spc_common, function(x) length(x)), fill = health)) +
   geom_bar(position = 'stack') +
-  labs(y = "Common Name for Species")
-```
-
-Using K Nearest Neighbors to predict the health of a tree that is alive. Predictors used are latitude and longitude
-```{r}
-set.seed(9)
-clean <- clean_alive %>% filter(spc_common %in% common_names)
-clean <- clean %>% mutate(health = factor(health, levels = c("Poor", "Fair", "Good")))
-split <- initial_split(clean, prop = 0.80, strata = health)
-train <- training(split)
-test <- testing(split)
-
-recipe <- recipe(health ~ ., data = train) %>%
-  step_dummy(all_nominal_predictors())
-
-knn_mod <- knn_model <-
-  # specify that the model is a k-Nearest Neighhour (kNN)
-  nearest_neighbor() %>%
-  # select the package that the model coming from
-  set_engine("kknn") %>%
-  # choose mode
-  set_mode("classification")
-
-knn_wkflow <- workflow() %>%
-  add_model(knn_mod) %>%
-  add_recipe(recipe)
-
-knn_fit <- fit(knn_wkflow, train)
-
-predict(knn_fit, new_data = test, type = "class") %>%
-  bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class)
-
-results <- augment(knn_fit, new_data = test)
-results %>% roc_auc(truth = health, .pred_Poor:.pred_Good) # 0.6720176	
-results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
-# stronger at distinguishing classifications "Good"
+  labs(y = "Common Name for Species", title = "Distribution of Health for Alive Trees by Most Surveyed Species")
 ```
 
 ```{r, warning=FALSE}
@@ -140,33 +94,54 @@ borough_labels <- data.frame(long=c(-73.949997, -73.971321, -73.769417, -73.8648
 
 ggplot() +
   geom_polygon(aes(x = long, y = lat, group = group),fill = "white", colour = "grey80", data = nyc) +
-  xlab('Longitude') + 
-  ylab('Latitude') + 
-  geom_point(aes(x = longitude, y = latitude, colour=status), size = .3, alpha = 0.5, data=clean_with_status)+
+  labs(x="Longitude", y="Latitude", title="Spatial Distribution of Health for Alive Trees") +
+  geom_point(aes(x = longitude, y = latitude, colour=health), size = .3, alpha = 0.5, data=clean)+
   xlim(-74.25, -73.70) + ylim(40.50, 40.91) +
   geom_text(data = borough_labels, aes(x = long, y = lat, label = borough))
 ```
-
 ```{r}
 borough_data <- clean %>% select(borough, health) %>% na.omit()
 ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), fill = health)) +
   geom_bar(position = 'stack') +
-  labs(y = "Borough")
+  labs(y = "Borough", title="Distribution of Health of Alive Trees by Borough")
 ```
 
-
+# Setting up Models
+## Spliting Our Data
 ```{r}
 set.seed(9)
-split <- initial_split(clean %>% select(-spc_common, -borough), prop = 0.80, strata = health)
+split <- initial_split(clean, prop = 0.80, strata = health)
 train <- training(split)
 test <- testing(split)
+```
 
+```{r}
+dim(train)
+```
+
+```{r}
+dim(test)
+```
+
+## Creating a Recipe
+```{r}
 recipe <- recipe(health ~ ., data = train) %>%
   step_dummy(all_nominal_predictors())
+```
 
+## K-Fold Cross Validation
+```{r}
+tree_folds <- vfold_cv(train, v = 10, strata = health)
+```
+
+# Application of Models
+
+## K Nearest Neighbors
+
+```{r}
 knn_mod <- knn_model <-
   # specify that the model is a k-Nearest Neighhour (kNN)
-  nearest_neighbor() %>%
+  nearest_neighbor(neighbors = tune()) %>%
   # select the package that the model coming from
   set_engine("kknn") %>%
   # choose mode
@@ -176,53 +151,98 @@ knn_wkflow <- workflow() %>%
   add_model(knn_mod) %>%
   add_recipe(recipe)
 
-knn_fit <- fit(knn_wkflow, train)
+knn_grid <- grid_regular(degree(range = c(1, 10)), levels = 10)
 
-pred <- predict(knn_fit, new_data = test, type = "class") %>%
+tune_log <- tune_grid(
+  object = knn_wkflow, 
+  resamples = tree_folds, 
+  grid = knn_grid
+)
+show_best(tune_log, metric = "accuracy") 
+show_best(tune_log, metric = "roc_auc")
+best_deg_knn <- select_by_one_std_err(tune_log, degree, metric = "accuracy")
+final_knn <- finalize_workflow(knn_wkflow, best_deg_knn)
+
+knn_fit <- fit(final_knn, train)
+
+predict(knn_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) # 0.7965347
+  accuracy(truth=health, estimate= .pred_class) # 0.6869773	
 
-results <- augment(knn_fit, new_data = test) 
-results %>% roc_auc(truth = health, .pred_Dead:.pred_Good) # 0.6775519
-results %>% roc_curve(truth = health, .pred_Dead:.pred_Good) %>% autoplot()
+results <- augment(knn_fit, new_data = test)
+results %>% roc_auc(truth = health, .pred_Poor:.pred_Good) # 0.6465457	
+results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 # stronger at distinguishing classifications "Good"
+
+
+model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=c(0.6869773), "ROC_AUC"=c(0.6465457))
 ```
 
-Using boosted trees to predict health of a tree that is alive
+## Boosted Trees
+
 ```{r}
-library(xgboost)
-set.seed(9)
-split <- initial_split(clean %>% select(-spc_common, -borough), prop = 0.80, strata = health)
-train <- training(split)
-test <- testing(split)
-
-new_recipe <- recipe(health ~ . , data = train) %>%
-  step_dummy(all_nominal_predictors())
-
 boost_tree_model <- boost_tree() %>%
   set_engine("xgboost") %>%
   set_mode("classification")
 
-boost_wkf <- workflow() %>% 
+boost_wkflow <- workflow() %>% 
   add_model(boost_tree_model) %>%
-  add_recipe(new_recipe)
+  add_recipe(recipe)
 
-boost_tree_fit <- fit(boost_wkf, train)
+tune_boost <- tune_grid(
+  object = boost_wkflow, 
+  resamples = tree_folds, 
+  grid = degree_grid
+)
+
+best_deg_boost <- select_by_one_std_err(tune_boost, degree, metric = "accuracy")
+final_boost <- finalize_workflow(boost_wkflow, best_deg_boost)
+
+boost_tree_fit <- fit(final_boost, train)
 
 boost_tree_pred <- predict(boost_tree_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) # 0.8139226
+  accuracy(truth=health, estimate= .pred_class) # 0.7461171	
 
 boost_tree_results <- augment(boost_tree_fit, new_data = test) 
+boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) # 0.693939		
+boost_tree_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
+boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap")
 
-boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Dead:.pred_Good) # 0.6529426	
-boost_tree_results %>% roc_curve(truth = health, .pred_Dead:.pred_Good) %>% autoplot()
-boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap") # incorrectly predicts "Good" for many trees in poor or fair health
+model_metrics[2,] <- c("Boosted Trees", 0.7461171, 0.693939)
 ```
 
+Due to imbalanced data, most incorrect health classifications are classified as Good.
+
+## Random Forests
 ```{r}
-library(corrplot)
-corrplot(cor(select_if(clean_numeric, is.numeric)), method="color", type="lower") # longitude and latitude seem to be the only predictors with moderately strong correlations with one another. coerrelation coeff is 0.57
+rf_model <- rand_forest(min_n = tune(), mtry = tune()) %>%
+  set_engine("randomForest", importance = TRUE) %>%
+  set_mode("classification")
+
+rf_wkflow <- workflow() %>% 
+  add_model(rf_model) %>%
+  add_recipe(recipe)
+
+tune_rf <- tune_grid(
+  object = rf_wkflow, 
+  resamples = tree_folds, 
+  grid = degree_grid
+)
+
+best_deg_rf <- select_by_one_std_err(tune_rf, degree, metric = "accuracy")
+final_rf <- finalize_workflow(rf_wkflow, best_deg_rf)
+
+rf_fit <- fit(final_rf, train)
+
+predict(rf_fit, new_data = test, type = "class") %>%
+  bind_cols(select(test, health)) %>%
+  accuracy(truth=health, estimate= .pred_class) # 0.0.744325	
+
+rf_results <- augment(rf_fit, new_data = test) 
+rf_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) # 	
+
+model_metrics[3,] <- c("Random Forests", 0.744325, 0.5)
 ```
 
 
