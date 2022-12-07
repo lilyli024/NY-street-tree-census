@@ -1,34 +1,62 @@
 ---
 title: "Prediction Model using NY Street Tree Census"
 author: "Lily Li"
-output: html_document
+output: 
+  html_document:
+    code_folding: hide
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+# Introduction
 
-```{r}
+## About the Data
+
+* `health`: Indicates health of the tree; levels: dead, poor, fair, good
+* `tree_dbh`: Diameter of the tree, measured at approximately 54 inches above the ground
+* `curb_loc`: Indicates trees relationship to the curb; levels: OnCurb, OffsetFromCurb
+* `spc_common`: Common name of tree species
+* `root_stone`: Root problems caused by paving stones in the tree bed
+* `root_grate`: Root problems caused by metal grates
+* `root_other`: Presence of other root problems
+* `trunk_wire`: Indicates the presence of a trunk problem caused by wires or rope wrapped around the trunk
+* `trnk_light`: Indicates the presence of a trunk problem caused by lighting installed on the tree
+* `trnk_other`: Indicates the presence of other trunk problems
+* `brch_light`: Indicates the presence of a branch problem caused by lights or wires in the branches
+* `brch_shoe`: Indicates the presence of a branch problem caused by sneakers in the branches
+* `brch_other`: Indicates the presence of other branch problems
+* `borough`: NYC borough; levels: Bronx, Brooklyn, Manhattan, Queens, Staten Island
+* `latitude`: Latitude of tree location, in decimal degrees
+* `longitude`: Longitude of tree location, in decimal degrees
+
+## Goal
+
+## Loading Packages
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
 library(readr)
 library(tidyverse)
 library(tidymodels)
 library(kknn)
+library(usethis) 
+usethis::edit_r_environ("project")
 tidymodels_prefer()
-raw_data <- read_csv('2015-street-tree-census-tree-data.csv') %>% 
-  dplyr::select(-created_at, -stump_diam, -spc_latin, -user_type, -address, -postcode, -problems, -c(nta:state), -borocode, -c(x_sp:bbl)) %>%
-  dplyr::select(status, health, everything())  %>%
-  filter(status != 'Stump') 
-
-# make categorical variables into factors
-class_data <- raw_data %>% dplyr::select(-c(tree_id, tree_dbh, latitude, longitude))
-raw_data[,colnames(class_data)] <- lapply(class_data,as.factor)
-
-clean <- raw_data %>% dplyr::select(-spc_common, -steward, -guards, -sidewalk)
-  
-clean_alive <- clean %>% select(-status) %>% na.omit() 
+raw_data <- read_csv('2015-street-tree-census-tree-data.csv')
 ```
 
-```{r}
+# Data Cleaning
+```{r, message=FALSE, warning=FALSE}
+clean <- raw_data %>%
+  filter(status != 'Stump') %>%
+  mutate(health = ifelse(status == "Alive", as.character(health), as.character(status))) %>%
+  mutate(health = factor(health, levels = c("Dead", "Poor", "Fair", "Good"))) %>%
+  dplyr::select(health, tree_dbh, curb_loc, spc_common, c(root_stone:brch_other), borough, latitude, longitude) %>% head(5000)
+
+# make categorical variables into factors
+clean[,colnames(clean %>% select_if(is.character))] <- lapply(clean %>% select_if(is.character),as.factor)
+  
+clean_alive <- clean %>% na.omit() 
+
 clean_numeric <- clean
 factor_to_numeric <- function(col_data) {
   for(col in colnames(col_data)){
@@ -44,17 +72,18 @@ clean_numeric[,colnames(binary_cols)] <- lapply(binary_cols, as.integer)
 clean_numeric <- clean_numeric %>% mutate(curb_loc = factor(curb_loc, levels = c("OffsetFromCurb","OnCurb")) %>% as.integer()) # 2 is OnCurb, and 1 is OffsetFromCurb
 ```
 
+# Exploratory Data Analysis
 
 Visualization of Tree Species Distribution
 ```{r}
 # Ignoring NA values, there are 652,169 trees with species identified
 # if tree is dead the following columns contain NA values: spc_common, steward, guards, sidewalk
-tree_count <- raw_data$spc_common %>% table() 
+tree_count <- clean$spc_common %>% table()
 remove_rare <- tree_count[tree_count>3000] # remove the rarer species (about 10-11% of the trees)
 common_names <- remove_rare %>% names()
 species_data <- bind_cols('Common Name of Species'=common_names, 'Count'=remove_rare)
 
-ggplot(raw_data %>% filter(spc_common %in% common_names), aes(y = reorder(spc_common, spc_common, function(x) length(x)), fill = health)) +
+ggplot(clean %>% filter(spc_common %in% common_names), aes(y = reorder(spc_common, spc_common, function(x) length(x)), fill = health)) +
   geom_bar(position = 'stack') +
   labs(y = "Common Name for Species")
 ```
@@ -66,7 +95,8 @@ split <- initial_split(clean_alive, prop = 0.80, strata = health)
 train <- training(split)
 test <- testing(split)
 
-recipe <- recipe(health ~ latitude + longitude, data = train)
+recipe <- recipe(health ~ ., data = train) %>%
+  step_dummy(all_nominal_predictors())
 
 knn_mod <- knn_model <-
   # specify that the model is a k-Nearest Neighhour (kNN)
@@ -92,17 +122,31 @@ results %>% roc_curve(truth = health, .pred_Fair:.pred_Poor) %>% autoplot()
 # stronger at distinguishing classifications "Good"
 ```
 
-```{r}
-clean_binary <- clean
-clean_binary[, colnames(clean %>% select(curb_loc:brch_other))] <- lapply(clean %>% select(curb_loc:brch_other), as.integer)
+```{r, warning=FALSE}
+nyc <- map_data("state", "new york") %>% 
+  select(long, lat, group, id = subregion)
 
-  ggplot(aes(x = Year, y=Year, fill= Year)) +
-  geom_bar(stat = "identity", width=0.8) +
-  labs(x = "Year",
-       y = "Number of the Student",
-       title = "Year frequency by Anxiety Reports") +
-  facet_wrap(~Anxiety)+
-  theme_minimal()
+borough_labels <- data.frame(long=c(-73.949997, -73.971321, -73.769417, -73.8648, -74.1502), 
+                             lat=c(40.650002, 40.776676, 40.71, 40.875, 40.5795), 
+                             borough=c("Brooklyn", "Manhattan", "Queens", "Bronx", "Staten Island"))
+
+ggplot() +
+  geom_polygon(aes(x = long, y = lat, group = group),fill = "white", colour = "grey80", data = nyc) +
+  xlab('Longitude') + 
+  ylab('Latitude') + 
+  #stat_density2d(aes(x = longitude, y = latitude, fill = status), alpha = .5,
+                 #h = .02, n = 200,
+                 #geom = "polygon", data = clean) + 
+  geom_point(aes(x = longitude, y = latitude, colour=status), size = .3, alpha = 0.5, data=clean)+
+  xlim(-74.25, -73.70) + ylim(40.50, 40.91) +
+  geom_text(data = borough_labels, aes(x = long, y = lat, label = borough))
+```
+
+```{r}
+borough_data <- clean %>% select(borough, health) %>% na.omit()
+ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), fill = health)) +
+  geom_bar(position = 'stack') +
+  labs(y = "Borough")
 ```
 
 Using Numeric Binary Predictors
@@ -143,7 +187,7 @@ Using boosted trees to predict health of a tree that is alive
 ```{r}
 library(xgboost)
 set.seed(9)
-split <- initial_split(clean_alive %>% select(-block_id, -zip_city, -`community board`, -cncldist, -st_assem, -st_senate), prop = 0.80, strata = health)
+split <- initial_split(clean_alive, prop = 0.80, strata = health)
 train <- training(split)
 test <- testing(split)
 
@@ -176,28 +220,4 @@ library(corrplot)
 corrplot(cor(select_if(clean_numeric, is.numeric)), method="color", type="lower") # longitude and latitude seem to be the only predictors with moderately strong correlations with one another. coerrelation coeff is 0.57
 ```
 
-```{r, warning=FALSE}
-nyc <- map_data("state", "new york") %>% 
-  select(long, lat, group, id = subregion)
-ggplot() +
-  geom_polygon(aes(x = long, y = lat, group = group),fill = "white", colour = "grey50", data = nyc) +
-  xlab('Longitude') + 
-  ylab('Latitude') + 
-  stat_density2d(aes(x = longitude, y = latitude, fill = status), alpha = .5,
-                 h = .02, n = 200,
-                 geom = "polygon", data = clean  %>% head(10000)) + 
-  xlim(-74.25, -73.70) + ylim(40.50, 40.91)
-
-```
-
-```{r}
-borough_data <- raw_data %>% 
-  mutate(stat_health = ifelse(status == "Alive", as.character(health), as.character(status))) %>%
-  mutate(stat_health = factor(stat_health, levels = c("Dead", "Poor", "Fair", "Good"))) %>%
-  select(borough, stat_health) %>% na.omit()
-
-ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), fill = stat_health)) +
-  geom_bar(position = 'stack') +
-  labs(y = "Borough")
-```
 
