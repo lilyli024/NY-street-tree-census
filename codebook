@@ -1,0 +1,17 @@
+status (fctr): Indicates status of the tree; levels: Alive, Dead
+health (fctr): Indicates health of the tree; levels: dead, poor, fair, good
+tree_dbh (double): Diameter of the tree, measured at approximately 54 inches above the ground
+curb_loc (fctr): Indicates trees relationship to the curb; levels: OnCurb, OffsetFromCurb
+spc_common (fctr): Common name of tree species
+root_stone (fctr): Root problems caused by paving stones in the tree bed
+root_grate (fctr): Root problems caused by metal grates
+root_other (fctr): Presence of other root problems
+trunk_wire (fctr): Indicates the presence of a trunk problem caused by wires or rope wrapped around the trunk
+trnk_light (fctr): Indicates the presence of a trunk problem caused by lighting installed on the tree
+trnk_othe (fctr)r: Indicates the presence of other trunk problems
+brch_light (fctr): Indicates the presence of a branch problem caused by lights or wires in the branches
+brch_shoe (fctr): Indicates the presence of a branch problem caused by sneakers in the branches
+brch_other (fctr): Indicates the presence of other branch problems
+borough (fctr): NYC borough; levels: Bronx, Brooklyn, Manhattan, Queens, Staten Island
+latitude (double): Latitude of tree location, in decimal degrees
+longitude (double): Longitude of tree location, in decimal degrees
