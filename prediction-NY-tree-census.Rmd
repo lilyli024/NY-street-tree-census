@@ -42,7 +42,7 @@ library(tidyverse)
 library(tidymodels)
 library(kknn) 
 library(xgboost) # for boosted trees
-library(randomForest)
+library(ranger)
 library(usethis) 
 usethis::edit_r_environ("project") # allocate memory to fit knn model
 tidymodels_prefer()
@@ -139,7 +139,7 @@ tree_folds <- vfold_cv(train, v = 10, strata = health)
 ## K Nearest Neighbors
 
 ```{r}
-knn_mod <- knn_model <-
+knn_mod <-
   # specify that the model is a k-Nearest Neighhour (kNN)
   nearest_neighbor(neighbors = tune()) %>%
   # select the package that the model coming from
@@ -151,37 +151,41 @@ knn_wkflow <- workflow() %>%
   add_model(knn_mod) %>%
   add_recipe(recipe)
 
-knn_grid <- grid_regular(degree(range = c(1, 10)), levels = 10)
+knn_grid <- grid_regular(parameters(knn_mod), levels = 10)
 
-tune_log <- tune_grid(
+tune_knn <- tune_grid(
   object = knn_wkflow, 
   resamples = tree_folds, 
   grid = knn_grid
 )
-show_best(tune_log, metric = "accuracy") 
-show_best(tune_log, metric = "roc_auc")
-best_deg_knn <- select_by_one_std_err(tune_log, degree, metric = "accuracy")
-final_knn <- finalize_workflow(knn_wkflow, best_deg_knn)
+
+show_best(tune_knn, metric = "accuracy") 
+show_best(tune_knn, metric = "roc_auc")
+best_knn <- select_best(tune_knn, metric = "accuracy")
+final_knn <- finalize_workflow(knn_wkflow, best_knn)
 
 knn_fit <- fit(final_knn, train)
 
 predict(knn_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) # 0.6869773	
+  accuracy(truth=health, estimate= .pred_class) # 0.7377539		
 
 results <- augment(knn_fit, new_data = test)
-results %>% roc_auc(truth = health, .pred_Poor:.pred_Good) # 0.6465457	
+results %>% roc_auc(truth = health, .pred_Poor:.pred_Good) # 0.6637862		
 results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
-# stronger at distinguishing classifications "Good"
+# stronger at distinguishing classifications "Good" and "Poor"
 
 
-model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=c(0.6869773), "ROC_AUC"=c(0.6465457))
+model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=c(0.7377539), "ROC_AUC"=c(0.6637862))
 ```
 
 ## Boosted Trees
 
 ```{r}
-boost_tree_model <- boost_tree() %>%
+boost_tree_model <- boost_tree(min_n = tune(),
+                               learn_rate = tune(),
+                               tree_depth = tune(),
+                               stop_iter = tune()) %>%
   set_engine("xgboost") %>%
   set_mode("classification")
 
@@ -189,60 +193,84 @@ boost_wkflow <- workflow() %>%
   add_model(boost_tree_model) %>%
   add_recipe(recipe)
 
+boost_param <- parameters(
+  min_n(),
+  tree_depth(),
+  learn_rate(),
+  stop_iter())
+
+boost_grid <- grid_max_entropy(boost_param, size = 15)
+
+
 tune_boost <- tune_grid(
   object = boost_wkflow, 
   resamples = tree_folds, 
-  grid = degree_grid
+  grid = boost_grid,
 )
 
-best_deg_boost <- select_by_one_std_err(tune_boost, degree, metric = "accuracy")
-final_boost <- finalize_workflow(boost_wkflow, best_deg_boost)
+show_best(tune_boost, metric = "accuracy") 
+show_best(tune_boost, metric = "roc_auc")
+
+best_boost <- select_best(tune_boost, metric = "accuracy")
+final_boost <- finalize_workflow(boost_wkflow, best_boost)
 
 boost_tree_fit <- fit(final_boost, train)
 
 boost_tree_pred <- predict(boost_tree_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) # 0.7461171	
+  accuracy(truth=health, estimate= .pred_class) # 0.7536232			
 
 boost_tree_results <- augment(boost_tree_fit, new_data = test) 
-boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) # 0.693939		
+boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) # 0.6336412			
 boost_tree_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap")
 
-model_metrics[2,] <- c("Boosted Trees", 0.7461171, 0.693939)
+model_metrics[2,] <- c("Boosted Trees", 0.7536232, 0.6352137)
 ```
 
 Due to imbalanced data, most incorrect health classifications are classified as Good.
 
 ## Random Forests
 ```{r}
-rf_model <- rand_forest(min_n = tune(), mtry = tune()) %>%
-  set_engine("randomForest", importance = TRUE) %>%
+rf_model <- rand_forest(min_n = tune(),
+                        mtry = tune()) %>%
+  set_engine("ranger") %>%
   set_mode("classification")
 
 rf_wkflow <- workflow() %>% 
   add_model(rf_model) %>%
   add_recipe(recipe)
 
+rf_param <- parameters(
+  min_n(),
+  mtry = mtry(range= c(2, 14))) 
+
+rf_grid <- grid_max_entropy(rf_param, size = 5)
+
+
 tune_rf <- tune_grid(
   object = rf_wkflow, 
   resamples = tree_folds, 
-  grid = degree_grid
+  grid = rf_grid,
 )
 
-best_deg_rf <- select_by_one_std_err(tune_rf, degree, metric = "accuracy")
-final_rf <- finalize_workflow(rf_wkflow, best_deg_rf)
+show_best(tune_rf, metric = "accuracy") 
+show_best(tune_rf, metric = "roc_auc")
+
+best_rf <- select_best(tune_rf, metric = "accuracy")
+final_rf <- finalize_workflow(rf_wkflow, best_rf)
 
 rf_fit <- fit(final_rf, train)
 
 predict(rf_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) # 0.0.744325	
+  accuracy(truth=health, estimate= .pred_class) # 0.7496252		
 
 rf_results <- augment(rf_fit, new_data = test) 
 rf_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) # 	
+rf_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
-model_metrics[3,] <- c("Random Forests", 0.744325, 0.5)
+model_metrics[3,] <- c("Random Forests", 0.744325, 0.6996146)
 ```
 
 
