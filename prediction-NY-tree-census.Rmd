@@ -13,10 +13,13 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## About the Data
 
-See [Kaggle Dataset](https://www.kaggle.com/datasets/new-york-city/ny-2015-street-tree-census-tree-data)
+This data consists of over 680 observations and includes measurements of percieved health for each individual tree. This urban forestry data was collected by over 2,200 volunteers from NYC Parks & Recreation and partner organizations. 
 
-* `status`: Indicates status of the tree; levels: Alive, Dead
-* `health`: Indicates health of the tree; levels: dead, poor, fair, good
+Variables used for predictions:
+
+* `health`: Indicates health of the tree; levels: poor, fair, good
+* `latitude`: Latitude of tree location, in decimal degrees
+* `longitude`: Longitude of tree location, in decimal degrees
 * `tree_dbh`: Diameter of the tree, measured at approximately 54 inches above the ground
 * `curb_loc`: Indicates trees relationship to the curb; levels: OnCurb, OffsetFromCurb
 * `spc_common`: Common name of tree species
@@ -29,62 +32,106 @@ See [Kaggle Dataset](https://www.kaggle.com/datasets/new-york-city/ny-2015-stree
 * `brch_light`: Indicates the presence of a branch problem caused by lights or wires in the branches
 * `brch_shoe`: Indicates the presence of a branch problem caused by sneakers in the branches
 * `brch_other`: Indicates the presence of other branch problems
-* `borough`: NYC borough; levels: Bronx, Brooklyn, Manhattan, Queens, Staten Island
-* `latitude`: Latitude of tree location, in decimal degrees
-* `longitude`: Longitude of tree location, in decimal degrees
+* `steward`: Indicates the number of unique signs of stewardship (maintenance) observed for this tree
+
+## Why is this important?
+
+Due to the long time for a tree to decompose, trees can appear alive but are actually dead. Death of trees can be due to many factors, such as road construction, age, warming temperatures, and lack of maintenance. Other than serving aesthetic purposes, trees in urban areas reduce air pollution by catching particulate matter and absorbing of gaseous pollutants. On top of that, trees buffer noise, filter storm water, cool city streets during summer months by providing shade, and take in carbon dioxide from city traffic. Knowing the number of trees degrading in health and being about to make future predictions can encourage replanting efforts, stricter maintenance of trees, and financing of preservation projects.
 
 ## Goal
 
-## Loading Packages
+Using the 2015 street tree census from the NYC Parks & Recreation, my goal is to predict the health of trees given that they are alive. A tree's health can be classified as Poor, Fair, or Good.
+
+## Loading the Data and Packages
 ```{r, echo=FALSE, warning=FALSE, message=FALSE}
 library(readr)
 library(tidyverse)
 library(tidymodels)
-library(kknn) 
-library(xgboost) # for boosted trees
-library(ranger)
-library(usethis) 
+library(ggpubr) # EDA
+library(kknn) # K-nearest neighbors
+library(glmnet) # linear regression
+library(xgboost) # boosted trees
+library(ranger) # random forests
+library(vip) # variable importance
+library(usethis)
 usethis::edit_r_environ("project") # allocate memory to fit knn model
 tidymodels_prefer()
-raw_data <- read_csv('2015-street-tree-census-tree-data.csv')
+raw_data <- read_csv('data/2015-street-tree-census-tree-data.csv')
 ```
+
+Check out the [Kaggle Dataset](https://www.kaggle.com/datasets/new-york-city/ny-2015-street-tree-census-tree-data)
 
 # Data Cleaning
+
+## Filtering the Data
+
+Since dead trees are missing information, such as species and steward, and stumps only mainly provide information on root health, all observations I will be using are from alive trees. There are many location metrics in the raw data, including address, postcode, zip_city, and borough, but I will use latitude and longitude for location to reduce multicollinearity. Variables like community board and block_id, are filtered out since if they were to be factorized, there would be hundreds or thousands of levels that I do not have the computation power to use; they are also are location metrics and thus would not be greatly useful as predictors. 
+
 ```{r, message=FALSE, warning=FALSE}
-clean_with_status <- raw_data %>%
-  filter(status != 'Stump') %>%
-  mutate(health = ifelse(status == "Alive", as.character(health), as.character(status))) %>%
-  mutate(health = factor(health, levels = c("Dead", "Poor", "Fair", "Good"))) %>%
-  dplyr::select(status, health, tree_dbh, curb_loc, spc_common, c(root_stone:brch_other), borough, latitude, longitude) %>% head(10000)
-
-
-# make categorical variables into factors
-clean_with_status[,colnames(clean_with_status %>% select_if(is.character))] <- lapply(clean_with_status %>% select_if(is.character),as.factor)
-
-clean <- clean_with_status %>% select(-status) %>% 
-  mutate(health = factor(health, levels = c("Poor", "Fair", "Good"))) %>% na.omit() 
-
+clean<- raw_data %>%
+  mutate(health = factor(health, levels = c("Poor", "Fair", "Good"))) %>%
+  dplyr::select(health, latitude, longitude, tree_dbh, curb_loc, spc_common, c(root_stone:brch_other), steward, borough) %>% na.omit()
 ```
 
-# Exploratory Data Analysis
 
-Visualization of Tree Species Distribution
-```{r}
-# Ignoring NA values, there are 652,169 trees with species identified
-# if tree is dead the following columns contain NA values: spc_common, steward, guards, sidewalk
+## Tidying the Data
+
+Categorical variables were turned into factors.
+
+```{r, message=FALSE, warning=FALSE}
+clean[,colnames(clean %>% select_if(is.character))] <- lapply(clean %>% select_if(is.character),as.factor)
+```
+
+Since the data set is immensely large, I choose to remove the rarer species; 85 percent of the alive trees were kept and left us with 23 out of 132 species.
+
+```{r, message=FALSE, warning=FALSE}
 tree_count <- clean$spc_common %>% table()
 remove_rare <- tree_count[tree_count>5000] # remove the rarer species (a little over 15% of the trees)
 common_names <- remove_rare %>% names()
 species_data <- bind_cols('Common Name of Species'=common_names, 'Count'=remove_rare)
 
 clean <- clean %>% filter(spc_common %in% common_names)
-                          
+```
+
+
+# Exploratory Data Analysis
+
+To get an idea of species as a predictor of health, I have graphed the distribution of health classifications by species. Though the Norway maple is the 5th most common tree inspected, a larger proportion of Norway maples are not in good health compared to other species.
+```{r, message=FALSE, warning=FALSE}
 ggplot(clean %>% filter(spc_common %in% common_names), aes(y = reorder(spc_common, spc_common, function(x) length(x)), fill = health)) +
   geom_bar(position = 'stack') +
   labs(y = "Common Name for Species", title = "Distribution of Health for Alive Trees by Most Surveyed Species")
 ```
 
-```{r, warning=FALSE}
+We can also look at numbers to see the 10 species with the lowest proportion of trees in good health. Variations of maple trees tend to be in poor or fair health.
+
+```{r, message=FALSE, warning=FALSE}
+species_df <- data.frame(matrix(nrow = 23, ncol = 4))
+index = 1
+for(name in common_names){
+  health_by_species <- clean %>% filter(spc_common == name)
+  total_good <- health_by_species %>% filter(health == "Good")
+  total_fair <- health_by_species %>% filter(health == "Fair")
+  total_poor <- health_by_species %>% filter(health == "Poor")
+  species_df[index,] <- c(name, nrow(total_good)/nrow(health_by_species),
+                         nrow(total_fair)/nrow(health_by_species),
+                         nrow(total_poor)/nrow(health_by_species))
+  index <- index + 1
+}
+
+species_df$X2 <- round(as.numeric(species_df$X2), digit = 3)
+species_df$X3 <- round(as.numeric(species_df$X3), digit = 3)
+species_df$X4 <- round(as.numeric(species_df$X4), digit = 3)
+
+species_df <- species_df %>% 
+  rename(Species = X1, Good=X2, Fair=X3, Poor=X4)
+
+arrange(species_df, desc(Poor), desc(Fair)) %>% head(10)
+```
+
+Here is a spatial plot showing the distribution of trees by health using longitude and latitude. The borough boundary lines are created by connect lines from points of boundary, thus they reduce/distort the boundaries. That is why there are points outside the borough boundaries, but we can still see that Manhattan and Queens are more heavily surveyed and have a larger proportion of trees in fair health compared to other boroughs.
+
+```{r, message=FALSE, warning=FALSE}
 nyc <- map_data("state", "new york") %>% 
   select(long, lat, group, id = subregion)
 
@@ -99,43 +146,45 @@ ggplot() +
   xlim(-74.25, -73.70) + ylim(40.50, 40.91) +
   geom_text(data = borough_labels, aes(x = long, y = lat, label = borough))
 ```
-```{r}
+
+We can also view the distribution via barchart.
+
+```{r, message=FALSE, warning=FALSE}
 borough_data <- clean %>% select(borough, health) %>% na.omit()
 ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), fill = health)) +
   geom_bar(position = 'stack') +
   labs(y = "Borough", title="Distribution of Health of Alive Trees by Borough")
 ```
-
-```{r}
+```{r, message=FALSE, warning=FALSE}
 clean <- clean %>% select(-borough)
 ```
 
-
 # Setting up Models
 ## Spliting Our Data
-```{r}
+
+```{r, message=FALSE, warning=FALSE}
 set.seed(9)
 split <- initial_split(clean, prop = 0.80, strata = health)
 train <- training(split)
 test <- testing(split)
 ```
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 dim(train)
 ```
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 dim(test)
 ```
 
 ## Creating a Recipe
-```{r}
+```{r, message=FALSE, warning=FALSE}
 recipe <- recipe(health ~ ., data = train) %>%
   step_dummy(all_nominal_predictors())
 ```
 
 ## K-Fold Cross Validation
-```{r}
+```{r, message=FALSE, warning=FALSE}
 tree_folds <- vfold_cv(train, v = 10, strata = health)
 ```
 
@@ -143,7 +192,7 @@ tree_folds <- vfold_cv(train, v = 10, strata = health)
 
 ## K Nearest Neighbors
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 knn_mod <-
   # specify that the model is a k-Nearest Neighhour (kNN)
   nearest_neighbor(neighbors = tune()) %>%
@@ -186,7 +235,7 @@ model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=c(0.7377539), "ROC_AUC"
 
 ## Boosted Trees
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 boost_tree_model <- boost_tree(min_n = tune(),
                                learn_rate = tune(),
                                tree_depth = tune(),
@@ -236,10 +285,10 @@ model_metrics[2,] <- c("Boosted Trees", 0.7536232, 0.6352137)
 Due to imbalanced data, most incorrect health classifications are classified as Good.
 
 ## Random Forests
-```{r}
+```{r, message=FALSE, warning=FALSE}
 rf_model <- rand_forest(min_n = tune(),
                         mtry = tune()) %>%
-  set_engine("ranger") %>%
+  set_engine("ranger", importance = "permutation") %>%
   set_mode("classification")
 
 rf_wkflow <- workflow() %>% 
@@ -248,7 +297,7 @@ rf_wkflow <- workflow() %>%
 
 rf_param <- parameters(
   min_n(),
-  mtry = mtry(range= c(2, 14))) 
+  mtry = mtry(range= c(2, 15))) 
 
 rf_grid <- grid_max_entropy(rf_param, size = 5)
 
@@ -269,18 +318,18 @@ rf_fit <- fit(final_rf, train)
 
 predict(rf_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) 	
+  yardstick::accuracy(truth=health, estimate= .pred_class) 	
 
 rf_results <- augment(rf_fit, new_data = test) 
 rf_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) 	
 rf_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
-model_metrics[3,] <- c("Random Forests", 0.744325, 0.6996146)
+model_metrics[3,] <- c("Random Forests", 0.7496252, 0.6982555)
 ```
 
 LASSO 
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 library(glmnet)
 lasso_spec <- multinom_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet") %>% 
@@ -316,3 +365,10 @@ lasso_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot(
 
 model_metrics[4,] <- c("LASSO", 0.7521239	, 0.6570955)
 ```
+
+```{r, message=FALSE, warning=FALSE}
+rf_fit %>%
+  extract_fit_parsnip() %>%
+  vip()
+```
+
