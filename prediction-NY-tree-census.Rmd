@@ -106,6 +106,11 @@ ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), 
   labs(y = "Borough", title="Distribution of Health of Alive Trees by Borough")
 ```
 
+```{r}
+clean <- clean %>% select(-borough)
+```
+
+
 # Setting up Models
 ## Spliting Our Data
 ```{r}
@@ -168,10 +173,10 @@ knn_fit <- fit(final_knn, train)
 
 predict(knn_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) # 0.7377539		
+  accuracy(truth=health, estimate= .pred_class)		
 
 results <- augment(knn_fit, new_data = test)
-results %>% roc_auc(truth = health, .pred_Poor:.pred_Good) # 0.6637862		
+results %>% roc_auc(truth = health, .pred_Poor:.pred_Good)		
 results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 # stronger at distinguishing classifications "Good" and "Poor"
 
@@ -218,10 +223,10 @@ boost_tree_fit <- fit(final_boost, train)
 
 boost_tree_pred <- predict(boost_tree_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) # 0.7536232			
+  accuracy(truth=health, estimate= .pred_class) 	
 
 boost_tree_results <- augment(boost_tree_fit, new_data = test) 
-boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) # 0.6336412			
+boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good)  			
 boost_tree_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap")
 
@@ -264,13 +269,50 @@ rf_fit <- fit(final_rf, train)
 
 predict(rf_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) # 0.7496252		
+  accuracy(truth=health, estimate= .pred_class) 	
 
 rf_results <- augment(rf_fit, new_data = test) 
-rf_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) # 	
+rf_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) 	
 rf_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
 model_metrics[3,] <- c("Random Forests", 0.744325, 0.6996146)
 ```
 
+LASSO 
 
+```{r}
+library(glmnet)
+lasso_spec <- multinom_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("classification")
+
+lasso_wkflow <- workflow() %>% 
+  add_recipe(recipe) %>% 
+  add_model(lasso_spec)
+
+lasso_grid <- grid_regular(penalty(range = c(-5, 5)), levels = 10)
+
+tune_lasso <- tune_grid(
+  object = lasso_wkflow, 
+  resamples = tree_folds, 
+  grid = lasso_grid,
+)
+
+show_best(tune_lasso, metric = "accuracy") 
+show_best(tune_lasso, metric = "roc_auc")
+
+best_lasso <- select_best(tune_lasso, metric = "accuracy")
+final_lasso <- finalize_workflow(lasso_wkflow, best_lasso)
+
+lasso_fit <- fit(final_lasso, train)
+
+predict(lasso_fit, new_data = test, type = "class") %>%
+  bind_cols(select(test, health)) %>%
+  accuracy(truth=health, estimate= .pred_class) 	
+
+lasso_results <- augment(lasso_fit, new_data = test) 
+lasso_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) 
+lasso_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
+
+model_metrics[4,] <- c("LASSO", 0.7521239	, 0.6570955)
+```
