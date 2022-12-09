@@ -155,8 +155,18 @@ ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), 
   geom_bar(position = 'stack') +
   labs(y = "Borough", title="Distribution of Health of Alive Trees by Borough")
 ```
+
 ```{r, message=FALSE, warning=FALSE}
 clean <- clean %>% select(-borough)
+```
+
+Looking at the distribution of health by binary predictors, we see that there are predictors, root_stone brch_light, and root_other, with higher proportions of Yes's. It is interesting to note that a tree with a Yes in a problem category can still be in good health.
+
+```{r, message=FALSE, warning=FALSE}
+clean %>% pivot_longer(., clean %>% select(root_stone:brch_other) %>% colnames(), names_to = "variable", values_to = "values") %>%
+  ggplot(., aes(x = health, fill = values, y =""))+
+  geom_bar(stat = "identity", position = "stack") + facet_wrap(~variable) +
+  labs(x="Health by Predictor", y = "count", title = "Distribution of Health by Predictor")
 ```
 
 # Setting up Models
@@ -371,4 +381,6 @@ rf_fit %>%
   extract_fit_parsnip() %>%
   vip()
 ```
+
+
 
