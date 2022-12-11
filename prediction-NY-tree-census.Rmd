@@ -169,8 +169,26 @@ clean %>% pivot_longer(., clean %>% select(root_stone:brch_other) %>% colnames()
   labs(x="Health by Predictor", y = "count", title = "Distribution of Health by Predictor")
 ```
 
+```{r}
+par(mfrow=c(1,3))
+poor_steward <- clean %>% filter(health=="Poor") %>% group_by(steward) %>% summarise(count= n())
+pie(poor_steward[,2] %>% unlist(), labels = c("1or2", "3or4", "4orMore", "None"), init.angle = 280,
+    main = "Stewards for Poor Health")
+
+fair_steward <- clean %>% filter(health=="Fair") %>% group_by(steward) %>% summarise(count= n())
+pie(fair_steward[,2] %>% unlist(), labels = c("1or2", "3or4", "4orMore", "None"), init.angle = 280,
+    main = "Stewards for Fair Health")
+
+good_steward <- clean %>% filter(health=="Good") %>% group_by(steward) %>% summarise(count= n())
+pie(good_steward[,2] %>% unlist(), labels = c("1or2", "3or4", "4orMore", "None"), init.angle = 280,
+    main = "Stewards for Good Health")
+```
+
+
 # Setting up Models
 ## Spliting Our Data
+
+Here, the data to split, using 80 percent of the original data to learn on. Since the data is imbalanced (most trees are in good health), stratified sampling is used to helps reduce bias in selection and best represent each factor level to evaluate differences in groups.
 
 ```{r, message=FALSE, warning=FALSE}
 set.seed(9)
@@ -179,21 +197,33 @@ train <- training(split)
 test <- testing(split)
 ```
 
+441901 observations in the training set
+
 ```{r, message=FALSE, warning=FALSE}
 dim(train)
 ```
+
+110477 observations in the testing set
 
 ```{r, message=FALSE, warning=FALSE}
 dim(test)
 ```
 
+We have a very large sufficient amount of data to expose potential patterns using models.
+
 ## Creating a Recipe
+
+We will be using the same recipe in all our models, using health as our response variable, all the same selected predictors, and same model condistions.
+
 ```{r, message=FALSE, warning=FALSE}
 recipe <- recipe(health ~ ., data = train) %>%
   step_dummy(all_nominal_predictors())
 ```
 
 ## K-Fold Cross Validation
+
+Instead of validation set approach, we will k-fold cross validation which will split our training set into 10 subsets, leaving one for testing and evaluation of the model, and reducing overfitting.
+
 ```{r, message=FALSE, warning=FALSE}
 tree_folds <- vfold_cv(train, v = 10, strata = health)
 ```
@@ -201,6 +231,8 @@ tree_folds <- vfold_cv(train, v = 10, strata = health)
 # Application of Models
 
 ## K Nearest Neighbors
+
+This distance-based algorithm estimates the likelihood of class membership for each observation. Since this does not favor one group over the other based on size, this is a strong algorithm for imbalanced data.
 
 ```{r, message=FALSE, warning=FALSE}
 knn_mod <-
@@ -215,30 +247,50 @@ knn_wkflow <- workflow() %>%
   add_model(knn_mod) %>%
   add_recipe(recipe)
 
-knn_grid <- grid_regular(parameters(knn_mod), levels = 10)
+knn_grid <- grid_regular(parameters(knn_mod), levels = 8) # Optimizing the number of neighbors, using odd numbers to avoid a tie
 
 tune_knn <- tune_grid(
   object = knn_wkflow, 
   resamples = tree_folds, 
   grid = knn_grid
 )
+```
 
-show_best(tune_knn, metric = "accuracy") 
+Let's take a look at which K values give us the best accuracy.
+
+```{r, message=FALSE, warning=FALSE}
+show_best(tune_knn, metric = "accuracy")
+```
+
+We can see if the optimal K value for highest area under the ROC curve.
+
+```{r, message=FALSE, warning=FALSE}
 show_best(tune_knn, metric = "roc_auc")
+```
+
+We'll select the K value by accuracy and apply it to our workflow.
+
+```{r, message=FALSE, warning=FALSE}
 best_knn <- select_best(tune_knn, metric = "accuracy")
 final_knn <- finalize_workflow(knn_wkflow, best_knn)
+```
 
+After tuning the number of neighbors, we can fit the data to our training set and check the accuracy of predictions with our testing set.
+
+```{r, message=FALSE, warning=FALSE}
 knn_fit <- fit(final_knn, train)
 
 predict(knn_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class)		
+  accuracy(truth=health, estimate= .pred_class)	
+```
 
+The model is stronger at distinguishing classifications "Good" and "Poor".
+
+```{r, message=FALSE, warning=FALSE}
 results <- augment(knn_fit, new_data = test)
 results %>% roc_auc(truth = health, .pred_Poor:.pred_Good)		
 results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
-# stronger at distinguishing classifications "Good" and "Poor"
-
 
 model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=c(0.7377539), "ROC_AUC"=c(0.6637862))
 ```
