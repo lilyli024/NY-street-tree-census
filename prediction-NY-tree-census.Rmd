@@ -9,6 +9,12 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+```{r, warning=FALSE, out.width = '60%'}
+knitr::include_graphics("~/Desktop/PSTAT 131/NY-street-tree-census/Images/citystreet.jpg")
+```
+
+
 # Introduction
 
 ## About the Data
@@ -32,7 +38,6 @@ Variables used for predictions:
 * `brch_light`: Indicates the presence of a branch problem caused by lights or wires in the branches
 * `brch_shoe`: Indicates the presence of a branch problem caused by sneakers in the branches
 * `brch_other`: Indicates the presence of other branch problems
-* `steward`: Indicates the number of unique signs of stewardship (maintenance) observed for this tree
 
 ## Why is this important?
 
@@ -70,7 +75,7 @@ Since dead trees are missing information, such as species and steward, and stump
 ```{r, message=FALSE, warning=FALSE}
 clean <- raw_data %>%
   mutate(health = factor(health, levels = c("Poor", "Fair", "Good"))) %>%
-  dplyr::select(health, latitude, longitude, tree_dbh, curb_loc, spc_common, c(root_stone:brch_other), steward, borough) %>% na.omit()
+  dplyr::select(health, latitude, longitude, tree_dbh, curb_loc, spc_common, c(root_stone:brch_other), borough) %>% na.omit()
 ```
 
 ## Tidying the Data
@@ -91,7 +96,8 @@ species_data <- bind_cols('Common Name of Species'=common_names, 'Count'=remove_
 
 clean <- clean %>% filter(spc_common %in% common_names)
 
-clean <- clean %>% group_by(health) %>% slice_sample(prop = .2)
+# clean <- clean %>% group_by(health) %>% slice_sample(prop = .2)
+clean <- clean %>% slice_sample(prop = .2)
 ```
 
 Finally, I am only using 20 percent observations due to computational time, but the random sampling is stratified by our grouping.
@@ -140,7 +146,7 @@ Here is a spatial plot showing the distribution of trees by health using longitu
 
 ```{r, message=FALSE, warning=FALSE}
 nyc <- map_data("state", "new york") %>% 
-  select(long, lat, group, id = subregion)
+  dplyr::select(long, lat, group, id = subregion)
 
 borough_labels <- data.frame(long=c(-73.949997, -73.971321, -73.769417, -73.8648, -74.1502), 
                              lat=c(40.650002, 40.776676, 40.71, 40.875, 40.5795), 
@@ -157,42 +163,26 @@ ggplot() +
 We can also view the distribution via barchart.
 
 ```{r, message=FALSE, warning=FALSE}
-borough_data <- clean %>% select(borough, health) %>% na.omit()
+borough_data <- clean %>% dplyr::select(borough, health) %>% na.omit()
 ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), fill = health)) +
   geom_bar(position = 'stack') +
   labs(y = "Borough", title="Distribution of Health of Alive Trees by Borough")
 ```
 
 ```{r, message=FALSE, warning=FALSE}
-clean <- clean %>% select(-borough)
+clean <- clean %>% dplyr::select(-borough)
 
-save(clean, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/clean_data.rda")
+save(clean, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/clean_data.csv")
 ```
 
 Looking at the distribution of health by binary predictors, we see that there are predictors, root_stone brch_light, and root_other, with higher proportions of Yes's. It is interesting to note that a tree with a Yes in a problem category can still be in good health.
 
 ```{r, message=FALSE, warning=FALSE}
-clean %>% pivot_longer(., clean %>% select(root_stone:brch_other) %>% colnames(), names_to = "variable", values_to = "values") %>%
+clean %>% pivot_longer(., clean %>% dplyr::select(root_stone:brch_other, -health) %>% colnames(), names_to = "variable", values_to = "values") %>%
   ggplot(., aes(x = health, fill = values, y =""))+
   geom_bar(stat = "identity", position = "stack") + facet_wrap(~variable) +
   labs(x="Health by Predictor", y = "count", title = "Distribution of Health by Predictor")
 ```
-
-```{r}
-par(mfrow=c(1,3))
-poor_steward <- clean %>% filter(health=="Poor") %>% group_by(steward) %>% summarise(count= n())
-pie(poor_steward[,2] %>% unlist(), labels = c("1or2", "3or4", "4orMore", "None"), init.angle = 280,
-    main = "Stewards for Poor Health")
-
-fair_steward <- clean %>% filter(health=="Fair") %>% group_by(steward) %>% summarise(count= n())
-pie(fair_steward[,2] %>% unlist(), labels = c("1or2", "3or4", "4orMore", "None"), init.angle = 280,
-    main = "Stewards for Fair Health")
-
-good_steward <- clean %>% filter(health=="Good") %>% group_by(steward) %>% summarise(count= n())
-pie(good_steward[,2] %>% unlist(), labels = c("1or2", "3or4", "4orMore", "None"), init.angle = 280,
-    main = "Stewards for Good Health")
-```
-
 
 # Setting up Models
 ## Spliting Our Data
@@ -239,7 +229,7 @@ tree_folds <- vfold_cv(train, v = 10, strata = health)
 
 This distance-based algorithm estimates the likelihood of class membership for each observation. Since this does not favor one group over the other based on size, this is a strong algorithm for imbalanced data.
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 knn_mod <-
   # specify that the model is a k-Nearest Neighhour (kNN)
   nearest_neighbor(neighbors = tune()) %>%
@@ -264,6 +254,7 @@ tune_knn <- tune_grid(
 Let's take a look at which K values give us the best accuracy.
 
 ```{r, message=FALSE, warning=FALSE}
+load("~/Desktop/PSTAT 131/NY-street-tree-census/data/knn_model.rda")
 show_best(tune_knn, metric = "accuracy")
 ```
 
@@ -275,44 +266,45 @@ show_best(tune_knn, metric = "roc_auc")
 
 We'll select the K value by accuracy and apply it to our workflow.
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 best_knn <- select_best(tune_knn, metric = "accuracy")
 final_knn <- finalize_workflow(knn_wkflow, best_knn)
 ```
 
 After tuning the number of neighbors, we can fit the data to our training set and check the accuracy of predictions with our testing set.
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 knn_fit <- fit(final_knn, train)
 
 knn_accuracy <- predict(knn_fit, new_data = test, type = "class") %>%
-  bind_cols(select(test, health)) %>%
+  bind_cols(dplyr::select(test, health)) %>%
   accuracy(truth=health, estimate= .pred_class)
-knn_accuracy
+
+results <- augment(knn_fit, new_data = test)
 ```
 
 The model is stronger at distinguishing classifications "Good" and "Poor".
 
 ```{r, message=FALSE, warning=FALSE}
-results <- augment(knn_fit, new_data = test)
+knn_accuracy # 	0.803485
 
 knn_auc <- results %>% roc_auc(truth = health, .pred_Poor:.pred_Good)	
-knn_auc
+knn_auc # 0.6318141
+
+results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 ```
 
 ```{r, message=FALSE, warning=FALSE}
-results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
+model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=	0.803485, "ROC_AUC"=0.6318141)
 
-model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=knn_accuracy, "ROC_AUC"=knn_auc)
-
-save(tune_knn, knn_fit, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/knn_model.rda")
+save(tune_knn, knn_fit, knn_accuracy, results, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/knn_model.rda")
 ```
 
 ## Boosted Trees
 
 Next we'll try boosted trees where the algorithm focuses on reducing the residuals of each step for each tree so that trees are dependent on prior trees. We'll tune: the number of tree since too many causes overfitting of the training set, the learning rate so consecutive steps have less importance, and the number of splits the trees will make.
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 boost_tree_model <- boost_tree(min_n = tune(),
                                learn_rate = tune(),
                                tree_depth = tune(), 
@@ -331,7 +323,7 @@ boost_param <- parameters(
   learn_rate(),
   stop_iter())
 
-boost_grid <- grid_max_entropy(boost_param, size = 20)
+boost_grid <- grid_max_entropy(boost_param, size = 5)
 
 
 tune_boost <- tune_grid(
@@ -344,10 +336,11 @@ tune_boost <- tune_grid(
 Let's look at which tuned parameters have the highest accuracy
 
 ```{r, message=FALSE, warning=FALSE}
+load("~/Desktop/PSTAT 131/NY-street-tree-census/data/boosted_trees_model.rda")
 show_best(tune_boost, metric = "accuracy") 
 ```
 
-Comparing optimal paremeters with the highest area under the ROC curve
+Comparing optimal parameters with the highest area under the ROC curve
 
 ```{r, message=FALSE, warning=FALSE}
 show_best(tune_boost, metric = "roc_auc")
@@ -355,26 +348,25 @@ show_best(tune_boost, metric = "roc_auc")
 
 Here are the results:
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 best_boost <- select_best(tune_boost, metric = "accuracy")
 final_boost <- finalize_workflow(boost_wkflow, best_boost)
 
 boost_tree_fit <- fit(final_boost, train)
 
 boost_tree_accuracy <- predict(boost_tree_fit, new_data = test, type = "class") %>%
-  bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) 	
-boost_tree_accuracy
+  bind_cols(dplyr::select(test, health)) %>%
+  accuracy(truth=health, estimate= .pred_class)
+boost_tree_results <- augment(boost_tree_fit, new_data = test) 
 ```
 
 ```{r, message=FALSE, warning=FALSE}
-boost_tree_results <- augment(boost_tree_fit, new_data = test) 
+boost_tree_accuracy # 0.8141208
 
 boost_tree_auc <- boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good)
-boost_tree_auc
-```
 
-```{r, message=FALSE, warning=FALSE}
+boost_tree_auc # 0.6519434
+
 boost_tree_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 ```
 
@@ -383,16 +375,16 @@ Due to imbalanced data, most incorrect health classifications are classified as 
 ```{r, message=FALSE, warning=FALSE}
 boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap")
 
-model_metrics[2,] <- c("Boosted Trees", boost_tree_accuracy, boost_tree_auc)
+model_metrics[2,] <- c("Boosted Trees", 0.8141208, 0.6519434)
 
-save(tune_boost, boost_tree_fit, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/boosted_trees_model.rda")
+save(tune_boost, boost_tree_fit, boost_tree_accuracy, boost_tree_results, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/boosted_trees_model.rda")
 ```
 
 ## Random Forests
 
 We'll use random forests that grows and combines decision trees and takes the average outputs of trees. We'll tune number of predictors to sample for each split and the number of observations for further splitting.
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 rf_model <- rand_forest(min_n = tune(),
                         mtry = tune()) %>%
   set_engine("ranger", importance = "permutation") %>% # look at variable importance
@@ -420,11 +412,12 @@ tune_rf <- tune_grid(
 We can glance at the optimal parameters.
 
 ```{r, message=FALSE, warning=FALSE}
+load("~/Desktop/PSTAT 131/NY-street-tree-census/data/rf_model.rda")
 show_best(tune_rf, metric = "accuracy") 
 show_best(tune_rf, metric = "roc_auc")
 ```
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 best_rf <- select_best(tune_rf, metric = "accuracy")
 final_rf <- finalize_workflow(rf_wkflow, best_rf)
 
@@ -433,32 +426,36 @@ rf_fit <- fit(final_rf, train)
 
 The accuracy after tuning parameters and selecting the best model.
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 rf_accuracy <- predict(rf_fit, new_data = test, type = "class") %>%
-  bind_cols(select(test, health)) %>%
+  bind_cols(dplyr::select(test, health)) %>%
   yardstick::accuracy(truth=health, estimate= .pred_class)
-rf_accuracy
+rf_results <- augment(rf_fit, new_data = test) 
 ```
 
 ```{r, message=FALSE, warning=FALSE}
-rf_results <- augment(rf_fit, new_data = test) 
+rf_accuracy # 0.8131251
+
 rf_auc <- rf_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good)
-rf_auc
+
+rf_auc # 0.6630429
 ```
+
+The model is best at classification of tree observations in poor health.
 
 ```{r, message=FALSE, warning=FALSE}
 rf_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
-model_metrics[3,] <- c("Random Forests", rf_accuracy, rf_auc)
+model_metrics[3,] <- c("Random Forests", 0.8131251, 0.6630429)
 
-save(tune_rf, rf_fit, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/rf_model.rda")
+save(tune_rf, rf_fit, rf_accuracy, rf_results, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/rf_model.rda")
 ```
 
 ## LASSO 
 
 Using multinomial linear regression, LASSO will shrink predictors that have minimal effect on the outcome down to zero. Removing insignificant variables using penalties based on lambda values will reduce random patterns from our model.
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 lasso_spec <- multinom_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet") %>% 
   set_mode("classification")
@@ -475,43 +472,52 @@ tune_lasso <- tune_grid(
   grid = lasso_grid,
 )
 
-show_best(tune_lasso, metric = "accuracy") 
-show_best(tune_lasso, metric = "roc_auc")
-
 best_lasso <- select_best(tune_lasso, metric = "accuracy")
 final_lasso <- finalize_workflow(lasso_wkflow, best_lasso)
 
 lasso_fit <- fit(final_lasso, train)
 ```
 
+```{r, message=FALSE, warning=FALSE}
+load("~/Desktop/PSTAT 131/NY-street-tree-census/data/lasso_model.rda")
+show_best(tune_lasso, metric = "accuracy") 
+show_best(tune_lasso, metric = "roc_auc")
+```
+
 Results from selecting the best penalty term for LASSO linear regression. 
 
-```{r, message=FALSE, warning=FALSE}
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 lasso_accuracy <- predict(lasso_fit, new_data = test, type = "class") %>%
-  bind_cols(select(test, health)) %>%
+  bind_cols(dplyr::select(test, health)) %>%
   accuracy(truth=health, estimate= .pred_class)
-lasso_accuracy
+
+lasso_results <- augment(lasso_fit, new_data = test) 
 ```
 
 ```{r, message=FALSE, warning=FALSE}
-lasso_results <- augment(lasso_fit, new_data = test) 
+lasso_accuracy # 0.8133514
+
 lasso_auc <- lasso_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) 
-lasso_auc
-```
+lasso_auc # 0.6302872
+``` 
 
 ```{r, message=FALSE, warning=FALSE}
 lasso_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
-model_metrics[4,] <- c("LASSO", lasso_accuracy, lasso_auc)
+model_metrics[4,] <- c("LASSO", 0.8133514, 0.6302872)
 
-save(tune_lasso, lasso_fit, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/lasso_model.rda")
+save(tune_lasso, lasso_fit, lasso_accuracy, lasso_results, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/lasso_model.rda")
 ```
 
 # Conclusion
 
+```{r, warning=FALSE, out.width = '60%'}
+knitr::include_graphics("~/Desktop/PSTAT 131/NY-street-tree-census/Images/neighborhood.jpg")
+```
+
 ## Comparison of metrics
 
-We can look at area under the ROC curve to see which model is best to distinguish between classes of tree health.
+We can look at area under the ROC curve to see which model is best to distinguish between classes of tree health. Random forests would be our ideal model and is most capable of distinguishing between classes and providing high accuracy.
 
 ```{r}
 model_metrics

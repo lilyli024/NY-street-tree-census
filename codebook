@@ -8,7 +8,7 @@ root_grate (fctr): Root problems caused by metal grates
 root_other (fctr): Presence of other root problems
 trunk_wire (fctr): Indicates the presence of a trunk problem caused by wires or rope wrapped around the trunk
 trnk_light (fctr): Indicates the presence of a trunk problem caused by lighting installed on the tree
-trnk_othe (fctr)r: Indicates the presence of other trunk problems
+trnk_other (fctr): Indicates the presence of other trunk problems
 brch_light (fctr): Indicates the presence of a branch problem caused by lights or wires in the branches
 brch_shoe (fctr): Indicates the presence of a branch problem caused by sneakers in the branches
 brch_other (fctr): Indicates the presence of other branch problems
