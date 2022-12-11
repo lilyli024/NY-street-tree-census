@@ -280,30 +280,39 @@ After tuning the number of neighbors, we can fit the data to our training set an
 ```{r, message=FALSE, warning=FALSE}
 knn_fit <- fit(final_knn, train)
 
-predict(knn_fit, new_data = test, type = "class") %>%
+knn_accuracy <- predict(knn_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class)	
+  accuracy(truth=health, estimate= .pred_class)
+knn_accuracy
 ```
 
 The model is stronger at distinguishing classifications "Good" and "Poor".
 
 ```{r, message=FALSE, warning=FALSE}
 results <- augment(knn_fit, new_data = test)
-results %>% roc_auc(truth = health, .pred_Poor:.pred_Good)		
+
+knn_auc <- results %>% roc_auc(truth = health, .pred_Poor:.pred_Good)	
+knn_auc
+```
+
+```{r, message=FALSE, warning=FALSE}
 results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
-model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=c(0.7377539), "ROC_AUC"=c(0.6637862))
+model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=knn_accuracy, "ROC_AUC"=knn_auc)
 ```
 
 ## Boosted Trees
 
+Next we'll try boosted trees where the algorithm focuses on reducing the residuals of each step for each tree so that trees are dependent on prior trees. We'll tune: the number of tree since too many causes overfitting of the training set, the learning rate so consecutive steps have less importance, and the number of splits the trees will make.
+
 ```{r, message=FALSE, warning=FALSE}
 boost_tree_model <- boost_tree(min_n = tune(),
                                learn_rate = tune(),
-                               tree_depth = tune(),
-                               stop_iter = tune()) %>%
+                               tree_depth = tune(), 
+                               stop_iter = tune()) %>% 
   set_engine("xgboost") %>%
   set_mode("classification")
+# tuned for early stopping tp reduce computational power; if a certain combination is performing poorly, the model stops before reaching the set number of trees
 
 boost_wkflow <- workflow() %>% 
   add_model(boost_tree_model) %>%
@@ -315,7 +324,7 @@ boost_param <- parameters(
   learn_rate(),
   stop_iter())
 
-boost_grid <- grid_max_entropy(boost_param, size = 15)
+boost_grid <- grid_max_entropy(boost_param, size = 20)
 
 
 tune_boost <- tune_grid(
@@ -323,34 +332,61 @@ tune_boost <- tune_grid(
   resamples = tree_folds, 
   grid = boost_grid,
 )
+```
 
+Let's look at which tuned parameters have the highest accuracy
+
+```{r, message=FALSE, warning=FALSE}
 show_best(tune_boost, metric = "accuracy") 
-show_best(tune_boost, metric = "roc_auc")
+```
 
+Comparing optimal paremeters with the highest area under the ROC curve
+
+```{r, message=FALSE, warning=FALSE}
+show_best(tune_boost, metric = "roc_auc")
+```
+
+Here are the results:
+
+```{r, message=FALSE, warning=FALSE}
 best_boost <- select_best(tune_boost, metric = "accuracy")
 final_boost <- finalize_workflow(boost_wkflow, best_boost)
 
 boost_tree_fit <- fit(final_boost, train)
 
-boost_tree_pred <- predict(boost_tree_fit, new_data = test, type = "class") %>%
+boost_tree_accuracy <- predict(boost_tree_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
   accuracy(truth=health, estimate= .pred_class) 	
+boost_tree_accuracy
+```
 
+```{r, message=FALSE, warning=FALSE}
 boost_tree_results <- augment(boost_tree_fit, new_data = test) 
-boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good)  			
-boost_tree_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
-boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap")
 
-model_metrics[2,] <- c("Boosted Trees", 0.7536232, 0.6352137)
+boost_tree_auc <- boost_tree_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good)
+boost_tree_auc
+```
+
+```{r, message=FALSE, warning=FALSE}
+boost_tree_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 ```
 
 Due to imbalanced data, most incorrect health classifications are classified as Good.
 
+```{r, message=FALSE, warning=FALSE}
+boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap")
+
+model_metrics[2,] <- c("Boosted Trees", boost_tree_accuracy, boost_tree_auc)
+```
+
 ## Random Forests
+
+We'll use random forests that grows and combines decision trees and takes the average outputs of trees. We'll tune number of predictors to sample for each split and the number of observations for further splitting.
+
 ```{r, message=FALSE, warning=FALSE}
 rf_model <- rand_forest(min_n = tune(),
                         mtry = tune()) %>%
-  set_engine("ranger", importance = "permutation") %>%
+  set_engine("ranger", importance = "permutation") %>% # look at variable importance
   set_mode("classification")
 
 rf_wkflow <- workflow() %>% 
@@ -361,7 +397,7 @@ rf_param <- parameters(
   min_n(),
   mtry = mtry(range= c(2, 15))) 
 
-rf_grid <- grid_max_entropy(rf_param, size = 5)
+rf_grid <- grid_max_entropy(rf_param, size = 10)
 
 
 tune_rf <- tune_grid(
@@ -370,29 +406,48 @@ tune_rf <- tune_grid(
   grid = rf_grid,
 )
 
+```
+
+We can glance at the optimal parameters.
+
+```{r, message=FALSE, warning=FALSE}
 show_best(tune_rf, metric = "accuracy") 
 show_best(tune_rf, metric = "roc_auc")
+```
 
+```{r, message=FALSE, warning=FALSE}
 best_rf <- select_best(tune_rf, metric = "accuracy")
 final_rf <- finalize_workflow(rf_wkflow, best_rf)
 
 rf_fit <- fit(final_rf, train)
-
-predict(rf_fit, new_data = test, type = "class") %>%
-  bind_cols(select(test, health)) %>%
-  yardstick::accuracy(truth=health, estimate= .pred_class) 	
-
-rf_results <- augment(rf_fit, new_data = test) 
-rf_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) 	
-rf_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
-
-model_metrics[3,] <- c("Random Forests", 0.7496252, 0.6982555)
 ```
 
-LASSO 
+The accuracy after tuning parameters and selecting the best model.
 
 ```{r, message=FALSE, warning=FALSE}
-library(glmnet)
+rf_accuracy <- predict(rf_fit, new_data = test, type = "class") %>%
+  bind_cols(select(test, health)) %>%
+  yardstick::accuracy(truth=health, estimate= .pred_class)
+rf_accuracy
+```
+
+```{r, message=FALSE, warning=FALSE}
+rf_results <- augment(rf_fit, new_data = test) 
+rf_auc <- rf_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good)
+rf_auc
+```
+
+```{r, message=FALSE, warning=FALSE}
+rf_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
+
+model_metrics[3,] <- c("Random Forests", rf_accuracy, rf_auc)
+```
+
+## LASSO 
+
+Using multinomial linear regression, LASSO will shrink predictors that have minimal effect on the outcome down to zero. Removing insignificant variables using penalties based on lambda values will reduce random patterns from our model.
+
+```{r, message=FALSE, warning=FALSE}
 lasso_spec <- multinom_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet") %>% 
   set_mode("classification")
@@ -416,17 +471,38 @@ best_lasso <- select_best(tune_lasso, metric = "accuracy")
 final_lasso <- finalize_workflow(lasso_wkflow, best_lasso)
 
 lasso_fit <- fit(final_lasso, train)
+```
 
-predict(lasso_fit, new_data = test, type = "class") %>%
+Results from selecting the best penalty term for LASSO linear regression. 
+
+```{r, message=FALSE, warning=FALSE}
+lasso_accuracy <- predict(lasso_fit, new_data = test, type = "class") %>%
   bind_cols(select(test, health)) %>%
-  accuracy(truth=health, estimate= .pred_class) 	
+  accuracy(truth=health, estimate= .pred_class)
+lasso_accuracy
+```
 
+```{r, message=FALSE, warning=FALSE}
 lasso_results <- augment(lasso_fit, new_data = test) 
-lasso_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) 
+lasso_auc <- lasso_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pred_Good) 
+lasso_auc
+```
+
+```{r, message=FALSE, warning=FALSE}
 lasso_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
-model_metrics[4,] <- c("LASSO", 0.7521239	, 0.6570955)
+model_metrics[4,] <- c("LASSO", lasso_accuracy, lasso_auc)
 ```
+
+# Conclusion
+
+## Comparison of metrics
+
+```{r}
+model_metrics
+```
+
+Since random forests was our best model, we can look at variable importance scores. This shows us the features that are used to make accurate predictions.
 
 ```{r, message=FALSE, warning=FALSE}
 rf_fit %>%
