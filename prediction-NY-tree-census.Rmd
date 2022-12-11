@@ -56,7 +56,7 @@ library(vip) # variable importance
 library(usethis)
 usethis::edit_r_environ("project") # allocate memory to fit knn model
 tidymodels_prefer()
-raw_data <- read_csv('data/2015-street-tree-census-tree-data.csv')
+raw_data <- read_csv('2015-street-tree-census-tree-data.csv')
 ```
 
 Check out the [Kaggle Dataset](https://www.kaggle.com/datasets/new-york-city/ny-2015-street-tree-census-tree-data)
@@ -68,11 +68,10 @@ Check out the [Kaggle Dataset](https://www.kaggle.com/datasets/new-york-city/ny-
 Since dead trees are missing information, such as species and steward, and stumps only mainly provide information on root health, all observations I will be using are from alive trees. There are many location metrics in the raw data, including address, postcode, zip_city, and borough, but I will use latitude and longitude for location to reduce multicollinearity. Variables like community board and block_id, are filtered out since if they were to be factorized, there would be hundreds or thousands of levels that I do not have the computation power to use; they are also are location metrics and thus would not be greatly useful as predictors. 
 
 ```{r, message=FALSE, warning=FALSE}
-clean<- raw_data %>%
+clean <- raw_data %>%
   mutate(health = factor(health, levels = c("Poor", "Fair", "Good"))) %>%
   dplyr::select(health, latitude, longitude, tree_dbh, curb_loc, spc_common, c(root_stone:brch_other), steward, borough) %>% na.omit()
 ```
-
 
 ## Tidying the Data
 
@@ -91,6 +90,14 @@ common_names <- remove_rare %>% names()
 species_data <- bind_cols('Common Name of Species'=common_names, 'Count'=remove_rare)
 
 clean <- clean %>% filter(spc_common %in% common_names)
+
+clean <- clean %>% group_by(health) %>% slice_sample(prop = .2)
+```
+
+Finally, I am only using 20 percent observations due to computational time, but the random sampling is stratified by our grouping.
+
+```{r, message=FALSE, warning=FALSE}
+dim(clean)
 ```
 
 
@@ -199,13 +206,9 @@ train <- training(split)
 test <- testing(split)
 ```
 
-441901 observations in the training set
-
 ```{r, message=FALSE, warning=FALSE}
 dim(train)
 ```
-
-110477 observations in the testing set
 
 ```{r, message=FALSE, warning=FALSE}
 dim(test)
@@ -507,6 +510,8 @@ save(tune_lasso, lasso_fit, file="~/Desktop/PSTAT 131/NY-street-tree-census/data
 # Conclusion
 
 ## Comparison of metrics
+
+We can look at area under the ROC curve to see which model is best to distinguish between classes of tree health.
 
 ```{r}
 model_metrics
