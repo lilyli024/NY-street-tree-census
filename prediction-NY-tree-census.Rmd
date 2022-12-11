@@ -3,6 +3,8 @@ title: "Prediction Model using NY Street Tree Census"
 author: "Lily Li"
 output: 
   html_document:
+    toc: yes
+    toc_float: true
     code_folding: hide
 ---
 
@@ -48,7 +50,7 @@ Due to the long time for a tree to decompose, trees can appear alive but are act
 Using the 2015 street tree census from the NYC Parks & Recreation, my goal is to predict the health of trees given that they are alive. A tree's health can be classified as Poor, Fair, or Good.
 
 ## Loading the Data and Packages
-```{r, echo=FALSE, warning=FALSE, message=FALSE}
+```{r, warning=FALSE, message=FALSE}
 library(readr)
 library(tidyverse)
 library(tidymodels)
