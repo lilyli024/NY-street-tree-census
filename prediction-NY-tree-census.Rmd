@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## About the Data
 
-This data consists of over 680 observations and includes measurements of percieved health for each individual tree. This urban forestry data was collected by over 2,200 volunteers from NYC Parks & Recreation and partner organizations. 
+This data consists of over 680 observations and includes measurements of perceived health for each individual tree. This urban forestry data was collected by over 2,200 volunteers from NYC Parks & Recreation and partner organizations. 
 
 Variables used for predictions:
 
@@ -158,6 +158,8 @@ ggplot(borough_data , aes(y = reorder(borough, borough, function(x) length(x)), 
 
 ```{r, message=FALSE, warning=FALSE}
 clean <- clean %>% select(-borough)
+
+save(clean, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/clean_data.rda")
 ```
 
 Looking at the distribution of health by binary predictors, we see that there are predictors, root_stone brch_light, and root_other, with higher proportions of Yes's. It is interesting to note that a tree with a Yes in a problem category can still be in good health.
@@ -299,6 +301,8 @@ knn_auc
 results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
 model_metrics <- data.frame("Model"=c("KNN"), "Accuracy"=knn_accuracy, "ROC_AUC"=knn_auc)
+
+save(tune_knn, knn_fit, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/knn_model.rda")
 ```
 
 ## Boosted Trees
@@ -377,6 +381,8 @@ Due to imbalanced data, most incorrect health classifications are classified as 
 boost_tree_results %>%  conf_mat(truth = health, estimate = .pred_class) %>% autoplot(type="heatmap")
 
 model_metrics[2,] <- c("Boosted Trees", boost_tree_accuracy, boost_tree_auc)
+
+save(tune_boost, boost_tree_fit, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/boosted_trees_model.rda")
 ```
 
 ## Random Forests
@@ -441,6 +447,8 @@ rf_auc
 rf_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
 model_metrics[3,] <- c("Random Forests", rf_accuracy, rf_auc)
+
+save(tune_rf, rf_fit, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/rf_model.rda")
 ```
 
 ## LASSO 
@@ -492,6 +500,8 @@ lasso_auc
 lasso_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
 model_metrics[4,] <- c("LASSO", lasso_accuracy, lasso_auc)
+
+save(tune_lasso, lasso_fit, file="~/Desktop/PSTAT 131/NY-street-tree-census/data/lasso_model.rda")
 ```
 
 # Conclusion
@@ -509,6 +519,4 @@ rf_fit %>%
   extract_fit_parsnip() %>%
   vip()
 ```
-
-
 
