@@ -227,9 +227,11 @@ tree_folds <- vfold_cv(train, v = 10, strata = health)
 
 # Application of Models
 
+For all our models, we will be specifying our models and setting parameters to tune for, so we can get a close fit to our training set without overfitting. By utilizing a grid, many combinations of parameters are tested for performance and variance. In our grid, there are different combinations of paremters for each level that we set. Then we can evaluate the best parameters to use by accuracy and roc_auc when fitted to our folds. Then we can select the best combination to use for our final model and fit it to the testing data set. At the end, we can compare all the models metrics of evalutaion on the testing data set.
+
 ## K Nearest Neighbors
 
-This distance-based algorithm estimates the likelihood of class membership for each observation. Since this does not favor one group over the other based on size, this is a strong algorithm for imbalanced data.
+This distance-based algorithm estimates the likelihood of class membership for each observation. Since this does not favor one group over the other based on size, this is a strong algorithm for imbalanced data. We'll tune for the number of neighbors.
 
 ```{r, message=FALSE, warning=FALSE, eval=FALSE}
 knn_mod <-
@@ -260,7 +262,7 @@ load("~/Desktop/PSTAT 131/NY-street-tree-census/data/knn_model.rda")
 show_best(tune_knn, metric = "accuracy")
 ```
 
-We can see if the optimal K value for highest area under the ROC curve.
+We can see if the optimal K value for highest area under the ROC curve. It looks like 15 neighbors (or just more neighbors in general) gives us the strongest model in this case.
 
 ```{r, message=FALSE, warning=FALSE}
 show_best(tune_knn, metric = "roc_auc")
@@ -304,7 +306,14 @@ save(tune_knn, knn_fit, knn_accuracy, results, file="~/Desktop/PSTAT 131/NY-stre
 
 ## Boosted Trees
 
-Next we'll try boosted trees where the algorithm focuses on reducing the residuals of each step for each tree so that trees are dependent on prior trees. We'll tune: the number of tree since too many causes overfitting of the training set, the learning rate so consecutive steps have less importance, and the number of splits the trees will make.
+Next we'll try boosted trees where the algorithm focuses on reducing the residuals of each step for each tree so that trees are dependent on prior trees. 
+
+We'll tune: 
+
+* the number of tree since too many causes overfitting of the training set
+* the learning rate so consecutive steps have less importance
+* the number of splits the trees will make
+* early stopping to reduce computational power (if a certain combination is performing poorly, the model stops before reaching the set number of trees)
 
 ```{r, message=FALSE, warning=FALSE, eval=FALSE}
 boost_tree_model <- boost_tree(min_n = tune(),
@@ -313,7 +322,6 @@ boost_tree_model <- boost_tree(min_n = tune(),
                                stop_iter = tune()) %>% 
   set_engine("xgboost") %>%
   set_mode("classification")
-# tuned for early stopping tp reduce computational power; if a certain combination is performing poorly, the model stops before reaching the set number of trees
 
 boost_wkflow <- workflow() %>% 
   add_model(boost_tree_model) %>%
@@ -342,7 +350,7 @@ load("~/Desktop/PSTAT 131/NY-street-tree-census/data/boosted_trees_model.rda")
 show_best(tune_boost, metric = "accuracy") 
 ```
 
-Comparing optimal parameters with the highest area under the ROC curve
+Comparing optimal parameters with the highest area under the ROC curve. Looks like the combination of parameters for the highest accuracy also distinguishes between classes the strongest. 
 
 ```{r, message=FALSE, warning=FALSE}
 show_best(tune_boost, metric = "roc_auc")
@@ -361,6 +369,8 @@ boost_tree_accuracy <- predict(boost_tree_fit, new_data = test, type = "class") 
   accuracy(truth=health, estimate= .pred_class)
 boost_tree_results <- augment(boost_tree_fit, new_data = test) 
 ```
+
+The model is stronger at distinguishing classifications "Good" and "Poor".
 
 ```{r, message=FALSE, warning=FALSE}
 boost_tree_accuracy # 0.8141208
@@ -384,7 +394,12 @@ save(tune_boost, boost_tree_fit, boost_tree_accuracy, boost_tree_results, file="
 
 ## Random Forests
 
-We'll use random forests that grows and combines decision trees and takes the average outputs of trees. We'll tune number of predictors to sample for each split and the number of observations for further splitting.
+We'll use random forests that grows and combines decision trees and takes the average outputs of trees. 
+
+We'll tune:
+
+* number of predictors to sample for each split
+* the number of observations for further splitting
 
 ```{r, message=FALSE, warning=FALSE, eval=FALSE}
 rf_model <- rand_forest(min_n = tune(),
@@ -458,7 +473,7 @@ save(tune_rf, rf_fit, rf_accuracy, rf_results, file="~/Desktop/PSTAT 131/NY-stre
 Using multinomial linear regression, LASSO will shrink predictors that have minimal effect on the outcome down to zero. Removing insignificant variables using penalties based on lambda values will reduce random patterns from our model.
 
 ```{r, message=FALSE, warning=FALSE, eval=FALSE}
-lasso_spec <- multinom_reg(penalty = tune(), mixture = 1) %>% 
+lasso_spec <- multinom_reg(penalty = tune(), mixture = 1) %>% # mixture = 1 to specify a lasso model
   set_engine("glmnet") %>% 
   set_mode("classification")
 
@@ -503,6 +518,8 @@ lasso_auc <- lasso_results %>% roc_auc(truth = health, estimate= .pred_Poor:.pre
 lasso_auc # 0.6302872
 ``` 
 
+The model is best at classification of tree observations in poor health.
+
 ```{r, message=FALSE, warning=FALSE}
 lasso_results %>% roc_curve(truth = health, .pred_Poor:.pred_Good) %>% autoplot()
 
@@ -519,13 +536,13 @@ knitr::include_graphics("~/Desktop/PSTAT 131/NY-street-tree-census/Images/neighb
 
 ## Comparison of metrics
 
-We can look at area under the ROC curve to see which model is best to distinguish between classes of tree health. Random forests would be our ideal model and is most capable of distinguishing between classes and providing high accuracy.
+We can look at area under the ROC curve to see which model is best to distinguish between classes of tree health. Random forests would be our ideal model and is most capable of distinguishing between classes and providing high accuracy. I'm surprised that models are relatively similar when comparing metrics. KNN has the lowest accuracy with a smaller area under the ROC curve since there are observations that don't have all the characteristics of other members in it's grouping.
 
 ```{r}
 model_metrics
 ```
 
-Since random forests was our best model, we can look at variable importance scores. This shows us the features that are used to make accurate predictions.
+Since random forests was our best model, we can look at variable importance scores. This shows us the features that are used to make accurate predictions. The most impactful features that optimized the performance accuaracy were location metrics, tree diameter, and damages to branches and trunks specified as "other". In our exploratory data analysis, we saw high proportions of Maple and London trees in "Poor" and "Fair" health, so that is reflected in the model as a difference used for classification. Since there are many species of trees used as levels of a factor, I originally wasn't sure if it would be a strong predictor, but the model seems to utilize species heavily for predictions. I would have expected root problems to higher in variable importance since there are more counts of root problems compared to branch and trunk problems.
 
 ```{r, message=FALSE, warning=FALSE}
 rf_fit %>%
